@@ -1,643 +1,984 @@
 "use client";
 
+/**
+ * The authorization queue.
+ *
+ * Every column here comes from `/v1/authorizations/contexts`. The backend
+ * records an authorization decision — actor, action, resource, zone, value,
+ * the network evidence collected, and who decided — and nothing more. Physical
+ * manifest detail (driver, plate, seal, tonnage, TWIC) is not data ZoneGate
+ * holds, so it is absent rather than invented: a console for a security
+ * product must not show fields that no system of record backs.
+ *
+ * Anything an operator does add lands in the transaction's `metadata`, which
+ * is free-form and shown verbatim in the detail panel.
+ */
+
+import { useEffect, useMemo, useState } from "react";
+
 import {
-    BadgeCheck,
-    CalendarDays,
-    CheckCircle2,
     ChevronLeft,
     ChevronRight,
-    ClipboardCheck,
-    Filter,
-    Fingerprint,
-    LockOpen,
-    Scale,
+    Plus,
+    RefreshCw,
     Search,
-    ShieldAlert,
-    ShieldCheck,
-    SlidersHorizontal,
-    Truck,
+    X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
 
-type RequestStatus =
-    | "PENDING"
-    | "SECONDARY"
-    | "APPROVED"
-    | "DENIED";
+import { useQueryParam } from "@/components/useQueryParam";
+import {
+    ApiError,
+    listDecisionContexts,
+    requestAuthorization,
+    type DecisionContext,
+    type DecisionOutcome,
+} from "@/lib/api";
+import {
+    badgeLabel,
+    effectiveOutcome,
+    isAwaitingAuthority,
+    shortStamp,
+    shortTime,
+} from "@/lib/derive";
 
-type RequestItem = {
-    id: string;
-    initials: string;
-    driver: string;
-    license: string;
-    carrier: string;
-    dock: string;
-    tier: string;
-    time: string;
-    status: RequestStatus;
-};
-
-const requests: RequestItem[] = [
-    {
-        id: "REQ-98042-TK",
-        initials: "MV",
-        driver: "Marcus Vance",
-        license: "DL: #WA-992-801",
-        carrier: "Horizon Global Transport",
-        dock: "Zone A - Dock 02 (HAZ)",
-        tier: "Tier 3 HAZMAT",
-        time: "14:26:51",
-        status: "PENDING",
-    },
-    {
-        id: "REQ-98041-DS",
-        initials: "DS",
-        driver: "Daniel Stone",
-        license: "DL: #CA-228-409",
-        carrier: "Pacific Freight Systems",
-        dock: "Zone C - Gate 11",
-        tier: "Tier 2 Secure",
-        time: "14:18:03",
-        status: "SECONDARY",
-    },
-    {
-        id: "REQ-98040-LR",
-        initials: "LR",
-        driver: "Lena Ruiz",
-        license: "DL: #TX-718-113",
-        carrier: "Atlas Port Logistics",
-        dock: "Zone A - Dock 05",
-        tier: "Tier 1 TWIC",
-        time: "14:02:27",
-        status: "APPROVED",
-    },
-    {
-        id: "REQ-98039-AT",
-        initials: "AT",
-        driver: "Aaron Tate",
-        license: "DL: #OR-782-531",
-        carrier: "Northline Container Services",
-        dock: "Zone D - Inspection Bay",
-        tier: "Tier 2 Secure",
-        time: "13:55:44",
-        status: "DENIED",
-    },
-    {
-        id: "REQ-98038-EK",
-        initials: "EK",
-        driver: "Evan Keller",
-        license: "DL: #NV-190-672",
-        carrier: "Cascadia Rail & Intermodal",
-        dock: "Zone B - Berth 02",
-        tier: "Tier 1 TWIC",
-        time: "13:48:19",
-        status: "APPROVED",
-    },
-];
-
-const tabs = [
+const TABS = [
     "All Requests",
-    "Pending Verification",
-    "Secondary Inspection",
-    "Cleared Today",
+    "Awaiting Authority",
+    "Approved",
     "Denied",
-];
+    "Human Decided",
+] as const;
+
+type Tab = (typeof TABS)[number];
+
+const SORTS = {
+    "Newest First": (a: DecisionContext, b: DecisionContext) =>
+        b.decision.decided_at.localeCompare(a.decision.decided_at),
+    "Oldest First": (a: DecisionContext, b: DecisionContext) =>
+        a.decision.decided_at.localeCompare(b.decision.decided_at),
+    "Highest Value": (a: DecisionContext, b: DecisionContext) =>
+        Number(b.transaction?.value ?? 0) - Number(a.transaction?.value ?? 0),
+    "Resource A-Z": (a: DecisionContext, b: DecisionContext) =>
+        (a.transaction?.resource_id ?? "").localeCompare(
+            b.transaction?.resource_id ?? ""
+        ),
+} as const;
+
+type SortKey = keyof typeof SORTS;
+
+const PAGE_SIZE = 8;
+
+function matchesTab(context: DecisionContext, tab: Tab): boolean {
+    const decision = context.decision;
+    const outcome = effectiveOutcome(decision);
+
+    switch (tab) {
+        case "Awaiting Authority":
+            return isAwaitingAuthority(decision);
+        case "Approved":
+            return outcome === "APPROVE";
+        case "Denied":
+            return outcome === "DENY";
+        case "Human Decided":
+            return decision.resolution !== null;
+        default:
+            return true;
+    }
+}
 
 export default function RequestsPage() {
-    const [activeTab, setActiveTab] = useState("All Requests");
-    const [search, setSearch] = useState("");
-    const [selectedId, setSelectedId] = useState("REQ-98042-TK");
+    const initialQuery = useQueryParam("q");
 
-    const filteredRequests = useMemo(() => {
-        return requests.filter((request) => {
-            const text =
-                `${request.id} ${request.driver} ${request.license} ${request.carrier} ${request.dock}`.toLowerCase();
+    // Remounting on a new query seeds the filter without a synchronising effect.
+    return <RequestsView key={initialQuery} initialQuery={initialQuery} />;
+}
 
-            const matchesSearch = text.includes(search.toLowerCase());
+function RequestsView({ initialQuery }: { initialQuery: string }) {
+    const [contexts, setContexts] = useState<DecisionContext[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
 
-            const matchesTab =
-                activeTab === "All Requests" ||
-                (activeTab === "Pending Verification" &&
-                    request.status === "PENDING") ||
-                (activeTab === "Secondary Inspection" &&
-                    request.status === "SECONDARY") ||
-                (activeTab === "Cleared Today" &&
-                    request.status === "APPROVED") ||
-                (activeTab === "Denied" &&
-                    request.status === "DENIED");
+    const [activeTab, setActiveTab] = useState<Tab>("All Requests");
+    const [search, setSearch] = useState(initialQuery);
+    const [zone, setZone] = useState("All Zones");
+    const [sort, setSort] = useState<SortKey>("Newest First");
+    const [page, setPage] = useState(0);
 
-            return matchesSearch && matchesTab;
-        });
-    }, [activeTab, search]);
+    // null keeps the queue on screen; an id opens that record full width.
+    const [openId, setOpenId] = useState<string | null>(null);
+    const [composerOpen, setComposerOpen] = useState(false);
+    const [toast, setToast] = useState<string | null>(null);
 
-    const selectedRequest =
-        requests.find((request) => request.id === selectedId) ?? requests[0];
+    // Bumping this re-runs the fetch; state is only set from its callbacks.
+    const [reloadToken, setReloadToken] = useState(0);
+    const reload = () => setReloadToken((current) => current + 1);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        listDecisionContexts({ limit: 200 })
+            .then((loaded) => {
+                if (cancelled) return;
+                setContexts(loaded);
+                setError(null);
+            })
+            .catch((caught) => {
+                if (cancelled) return;
+                setError(
+                    caught instanceof ApiError
+                        ? caught.message
+                        : "Unexpected error loading the authorization queue"
+                );
+            })
+            .finally(() => {
+                if (!cancelled) setLoading(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [reloadToken]);
+
+    useEffect(() => {
+        if (!toast) return;
+
+        const id = window.setTimeout(() => setToast(null), 3200);
+        return () => window.clearTimeout(id);
+    }, [toast]);
+
+    const zones = useMemo(() => {
+        const found = new Set<string>();
+        for (const context of contexts) {
+            if (context.transaction?.zone) found.add(context.transaction.zone);
+        }
+        return ["All Zones", ...[...found].sort()];
+    }, [contexts]);
+
+    const visible = useMemo(() => {
+        const needle = search.trim().toLowerCase();
+
+        return contexts
+            .filter((context) => matchesTab(context, activeTab))
+            .filter((context) =>
+                zone === "All Zones" ? true : context.transaction?.zone === zone
+            )
+            .filter((context) => {
+                if (!needle) return true;
+
+                const haystack = [
+                    context.decision.decision_id,
+                    context.decision.transaction_id,
+                    context.transaction?.resource_id,
+                    context.transaction?.actor_id,
+                    context.transaction?.zone,
+                ]
+                    .filter(Boolean)
+                    .join(" ")
+                    .toLowerCase();
+
+                return haystack.includes(needle);
+            })
+            .sort(SORTS[sort]);
+    }, [contexts, activeTab, zone, search, sort]);
+
+    const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+    const clampedPage = Math.min(page, pageCount - 1);
+    const rows = visible.slice(
+        clampedPage * PAGE_SIZE,
+        clampedPage * PAGE_SIZE + PAGE_SIZE
+    );
+
+    const countFor = (tab: Tab) =>
+        contexts.filter((context) => matchesTab(context, tab)).length;
+
+    const open = contexts.find(
+        (context) => context.decision.decision_id === openId
+    );
+
+    if (open) {
+        return (
+            <RecordDetail
+                context={open}
+                onBack={() => setOpenId(null)}
+            />
+        );
+    }
 
     return (
-        <div className="flex w-full flex-col">
-            <section className="mb-6 flex flex-col justify-between gap-4 rounded-lg border border-[#E2E8F0] bg-white p-6 shadow-[0_1px_2px_rgba(15,23,42,0.04)] md:flex-row md:items-end">
-                <div>
-                    <div className="mb-1 flex items-center gap-2">
-                        <span className="h-2 w-2 rounded-full bg-[#0D9488]" />
-                        <span className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-[#64748B]">
-                            Clearance Protocol // Queue Ingestion
-                        </span>
-                    </div>
+        <div className="flex w-full flex-col gap-6">
+            {toast && (
+                <div
+                    role="status"
+                    className="rounded-lg border border-[#CCFBF1] bg-[#F0FDFA] px-4 py-3 text-sm text-[#0F766E]"
+                >
+                    {toast}
+                </div>
+            )}
 
-                    <h1 className="text-3xl font-semibold uppercase tracking-[-0.03em] text-[#0F172A]">
-                        Access & Manifest Requests
+            <section className="flex flex-col justify-between gap-4 border-b border-[#E2E8F0] pb-4 lg:flex-row lg:items-end">
+                <div>
+                    <p className="text-[10px] font-medium uppercase tracking-widest text-[#64748B]">
+                        Authorization Queue // Berth-04
+                    </p>
+
+                    <h1 className="mt-1 text-2xl font-semibold uppercase tracking-tight text-[#0F172A]">
+                        Authorization Requests
                     </h1>
 
-                    <p className="mt-2 max-w-2xl text-sm text-[#64748B]">
-                        Inbound security clearance requests, bills of lading, and driver
-                        identity verification queues.
+                    <p className="mt-1 text-sm text-[#64748B]">
+                        Every decision the policy engine has recorded, with the
+                        evidence behind it.
                     </p>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                    <div className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-[#F1F5F9] px-3 py-2">
-                        <CalendarDays size={16} className="text-[#64748B]" />
-                        <span className="font-mono text-xs text-[#0F172A]">
-                            SHIFT B (08:00 - 16:00 UTC)
-                        </span>
-                    </div>
+                <div className="flex items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={reload}
+                        disabled={loading}
+                        className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-white px-3 py-2 font-mono text-[11px] text-[#0F172A] transition hover:border-[#0D9488] disabled:opacity-50"
+                    >
+                        <RefreshCw size={14} className="text-[#0D9488]" />
+                        REFRESH
+                    </button>
 
-                    <button className="flex items-center gap-2 rounded bg-[#0D9488] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#0F766E]">
-                        <ClipboardCheck size={17} />
-                        Submit New Manifest Clearance
+                    <button
+                        type="button"
+                        onClick={() => setComposerOpen(true)}
+                        className="flex items-center gap-2 rounded bg-[#0D9488] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#0F766E]"
+                    >
+                        <Plus size={14} />
+                        New Authorization
                     </button>
                 </div>
             </section>
 
-            <section className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <MetricCard
-                    label="Active Ingestion Queue"
-                    value="42"
-                    meta="Vehicles in dock"
-                    icon={<ClipboardCheck size={18} />}
-                    progress="w-2/3"
-                />
-
-                <MetricCard
-                    label="Biometric Match Avg"
-                    value="99.1%"
-                    meta="Face & TWIC Hash"
-                    icon={<Fingerprint size={18} />}
-                    progress="w-[99%]"
-                />
-
-                <MetricCard
-                    label="Secondary Escalations"
-                    value="6"
-                    meta="Bay 04 Inspection"
-                    icon={<ShieldAlert size={18} />}
-                    progress="w-1/4"
-                    warning
-                />
-
-                <MetricCard
-                    label="Today's Throughput"
-                    value="124"
-                    meta="Cargo BOL Units"
-                    icon={<BadgeCheck size={18} />}
-                    progress="w-4/5"
-                />
-            </section>
-
-            <section className="mb-4 flex flex-col gap-4">
-                <div className="flex flex-wrap gap-1 rounded-lg border border-[#E2E8F0] bg-white p-1 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-                    {tabs.map((tab) => {
-                        const active = activeTab === tab;
-
-                        return (
-                            <button
-                                key={tab}
-                                onClick={() => setActiveTab(tab)}
-                                className={`rounded px-4 py-2 font-mono text-[11px] uppercase tracking-wide transition ${active
-                                        ? "bg-[#0D9488] text-white"
-                                        : "bg-[#F8FAFC] text-[#64748B] hover:bg-[#F1F5F9] hover:text-[#0F172A]"
-                                    }`}
-                            >
-                                {tab}
-                            </button>
-                        );
-                    })}
-                </div>
-
-                <div className="flex flex-col items-center justify-between gap-4 rounded-lg border border-[#E2E8F0] bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)] md:flex-row">
-                    <div className="relative w-full md:w-96">
-                        <Search
-                            size={18}
-                            className="absolute left-3 top-1/2 -translate-y-1/2 text-[#64748B]"
-                        />
-
-                        <input
-                            value={search}
-                            onChange={(event) => setSearch(event.target.value)}
-                            placeholder="SEARCH MANIFEST ID, DRIVER NAME, PLATE NUMBER..."
-                            className="w-full rounded border border-[#E2E8F0] bg-[#F8FAFC] py-2 pl-10 pr-3 font-mono text-[11px] text-[#0F172A] outline-none placeholder:text-[#64748B] focus:border-[#0D9488]"
-                        />
-                    </div>
-
-                    <div className="flex w-full items-center justify-end gap-2 md:w-auto">
-                        <button className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-2 font-mono text-[11px] text-[#64748B]">
-                            <Filter size={16} />
-                            ZONE FILTER: ALL BERTHS
-                        </button>
-
-                        <button className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-2 font-mono text-[11px] text-[#64748B]">
-                            <SlidersHorizontal size={16} />
-                            SORT: SUBMISSION DESC
-                        </button>
-                    </div>
-                </div>
-            </section>
-
-            <section className="grid grid-cols-1 items-start gap-6 xl:grid-cols-12">
-                <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] xl:col-span-8">
-                    <div className="overflow-x-auto">
-                        <table className="w-full min-w-[1100px] border-collapse text-left">
-                            <thead>
-                                <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
-                                    {[
-                                        "Request ID",
-                                        "Driver / Operator",
-                                        "Carrier / Line",
-                                        "Access Dock",
-                                        "Security Tier",
-                                        "Time (UTC)",
-                                        "Status",
-                                        "Actions",
-                                    ].map((heading) => (
-                                        <th
-                                            key={heading}
-                                            className="px-4 py-3 font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-[#64748B]"
-                                        >
-                                            {heading}
-                                        </th>
-                                    ))}
-                                </tr>
-                            </thead>
-
-                            <tbody className="divide-y divide-[#E2E8F0]">
-                                {filteredRequests.map((request) => {
-                                    const selected = request.id === selectedId;
-
-                                    return (
-                                        <tr
-                                            key={request.id}
-                                            onClick={() => setSelectedId(request.id)}
-                                            className={`cursor-pointer transition ${selected
-                                                    ? "border-l-4 border-l-[#0D9488] bg-[#F0FDFA]"
-                                                    : "hover:bg-[#F8FAFC]"
-                                                }`}
-                                        >
-                                            <td className="whitespace-nowrap px-4 py-4 font-mono text-xs font-medium">
-                                                {selected && (
-                                                    <span className="mr-1 rounded bg-[#0D9488] px-1.5 py-0.5 text-[10px] font-semibold text-white">
-                                                        ACTIVE
-                                                    </span>
-                                                )}
-                                                {request.id}
-                                            </td>
-
-                                            <td className="whitespace-nowrap px-4 py-4">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[#CCFBF1] font-mono text-[11px] font-semibold text-[#0D9488]">
-                                                        {request.initials}
-                                                    </div>
-
-                                                    <div>
-                                                        <p className="text-sm font-semibold text-[#0F172A]">
-                                                            {request.driver}
-                                                        </p>
-                                                        <p className="font-mono text-[10px] text-[#64748B]">
-                                                            {request.license}
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                            </td>
-
-                                            <td className="whitespace-nowrap px-4 py-4 text-sm text-[#64748B]">
-                                                {request.carrier}
-                                            </td>
-
-                                            <td className="whitespace-nowrap px-4 py-4">
-                                                <span className="rounded bg-[#F1F5F9] px-2 py-1 font-mono text-[10px] text-[#0F172A]">
-                                                    {request.dock}
-                                                </span>
-                                            </td>
-
-                                            <td className="whitespace-nowrap px-4 py-4 font-mono text-[10px] text-[#64748B]">
-                                                {request.tier}
-                                            </td>
-
-                                            <td className="whitespace-nowrap px-4 py-4 text-right font-mono text-xs">
-                                                {request.time}
-                                            </td>
-
-                                            <td className="whitespace-nowrap px-4 py-4">
-                                                <StatusBadge status={request.status} />
-                                            </td>
-
-                                            <td className="whitespace-nowrap px-4 py-4 text-right">
-                                                <div className="flex justify-end gap-1">
-                                                    <button className="rounded border border-[#E2E8F0] bg-white px-2 py-1 font-mono text-[10px] uppercase hover:bg-[#F8FAFC]">
-                                                        Dossier
-                                                    </button>
-
-                                                    {request.status !== "DENIED" && (
-                                                        <button className="rounded bg-[#0D9488] px-2 py-1 font-mono text-[10px] uppercase text-white hover:bg-[#0F766E]">
-                                                            Admit
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <div className="flex items-center justify-between border-t border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3 text-[#64748B]">
-                        <span className="font-mono text-[10px]">
-                            SHOWING 1-5 OF 42 QUEUED MANIFESTS
-                        </span>
-
-                        <div className="flex items-center gap-2">
-                            <button className="flex h-7 w-7 items-center justify-center rounded border border-[#E2E8F0] bg-white">
-                                <ChevronLeft size={16} />
-                            </button>
-
-                            <span className="font-mono text-[10px] font-medium text-[#0F172A]">
-                                1 / 9
-                            </span>
-
-                            <button className="flex h-7 w-7 items-center justify-center rounded border border-[#E2E8F0] bg-white">
-                                <ChevronRight size={16} />
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                <aside className="flex flex-col gap-5 rounded-lg border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] xl:col-span-4">
-                    <div className="flex items-start justify-between border-b border-[#E2E8F0] pb-4">
-                        <div>
-                            <p className="font-mono text-[10px] uppercase tracking-[0.08em] text-[#64748B]">
-                                Inspection Dossier
-                            </p>
-
-                            <h2 className="mt-1 text-lg font-semibold text-[#0F172A]">
-                                {selectedRequest.id}
-                            </h2>
-
-                            <p className="mt-1 font-mono text-[10px] text-[#64748B]">
-                                BOL #99024-C | HASH: 8f4a..19c0
-                            </p>
-                        </div>
-
-                        <span className="inline-flex items-center gap-1.5 rounded-full border border-[#0D9488]/30 bg-[#F0FDFA] px-2 py-1 font-mono text-[10px] font-semibold text-[#0D9488]">
-                            <span className="h-1.5 w-1.5 rounded-full bg-[#1FD1A8]" />
-                            VERIFIED READY
-                        </span>
-                    </div>
-
-                    <div className="rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] p-4">
-                        <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                                <Fingerprint size={18} className="text-[#0D9488]" />
-                                <span className="font-mono text-[10px] font-semibold uppercase">
-                                    Driver Biometrics
-                                </span>
-                            </div>
-
-                            <span className="font-mono text-xs font-semibold text-[#0D9488]">
-                                99.4% MATCH
-                            </span>
-                        </div>
-
-                        <div className="mt-3 flex items-center gap-3">
-                            <div className="flex h-16 w-16 items-center justify-center rounded bg-[#E2E8F0]">
-                                <Truck size={26} className="text-[#64748B]" />
-                            </div>
-
-                            <div>
-                                <p className="font-semibold">{selectedRequest.driver}</p>
-                                <p className="font-mono text-[10px] text-[#64748B]">
-                                    TWIC CARD: EXP 2028-11
-                                </p>
-                                <p className="font-mono text-[10px] font-medium text-[#0D9488]">
-                                    FED CLEARANCE: APPROVED
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                        <DataTile
-                            label="Seal Integrity"
-                            value="RFID MATCH"
-                            meta="SEAL: #TG-8041-N"
-                            icon={<ShieldCheck size={16} />}
-                        />
-
-                        <DataTile
-                            label="Weight Readout"
-                            value="42.0 TONS"
-                            meta="TARE: WITHIN +0.2%"
-                            icon={<Scale size={16} />}
-                        />
-                    </div>
-
-                    <div className="rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] p-4">
-                        <div className="flex justify-between">
-                            <span className="font-mono text-[10px] uppercase text-[#64748B]">
-                                Cargo Declaration
-                            </span>
-                            <span className="rounded bg-[#E2E8F0] px-2 py-0.5 font-mono text-[10px]">
-                                CLASS 9 INDUSTRIAL
-                            </span>
-                        </div>
-
-                        <p className="mt-3 text-sm font-medium">
-                            Electronics & Industrial Switchgear (42 Tons)
-                        </p>
-
-                        <div className="mt-3 space-y-2 font-mono text-[10px] text-[#64748B]">
-                            <InfoRow label="Container ID" value="MSKU-908124-7" />
-                            <InfoRow label="Vehicle Chassis" value="FR-44-902 (TRIAXLE)" />
-                            <InfoRow
-                                label="Destination"
-                                value="BERTH B - SUB-STATION 4"
-                            />
-                        </div>
-                    </div>
-
-                    <div className="relative flex h-36 items-end overflow-hidden rounded-lg border border-[#E2E8F0] bg-[#0F172A] p-3">
-                        <div className="absolute inset-0 bg-[linear-gradient(to_top,rgba(15,23,42,0.95),rgba(15,23,42,0.25))]" />
-
-                        <div className="relative z-10 flex w-full items-center justify-between">
-                            <span className="font-mono text-[10px] text-white">
-                                LPR CAM-04: PLATE MATCH WA-9921-TK
-                            </span>
-
-                            <span className="rounded bg-[#0D9488] px-2 py-0.5 font-mono text-[10px] font-semibold text-white">
-                                SYNCED
-                            </span>
-                        </div>
-                    </div>
-
-                    <div className="rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] p-4">
-                        <div className="flex justify-between">
-                            <span className="font-mono text-[10px] uppercase text-[#64748B]">
-                                Security Observation
-                            </span>
-
-                            <span className="font-mono text-[10px] text-[#64748B]">
-                                14:20 UTC
-                            </span>
-                        </div>
-
-                        <p className="mt-2 text-xs italic text-[#0F172A]">
-                            “Driver presented valid TWIC credential and digital manifest
-                            hash. Seal visual inspection confirms untampered status on rear
-                            locks. Cleared for Berth 02 approach.”
-                        </p>
-
-                        <p className="mt-2 text-right font-mono text-[10px] text-[#64748B]">
-                            — GATE INSPECTOR K. VANCE
-                        </p>
-                    </div>
-
-                    <div className="flex gap-2">
-                        <button className="flex-1 rounded border border-[#E2E8F0] bg-white px-4 py-2 text-sm font-medium hover:bg-[#F8FAFC]">
-                            Flag Secondary
-                        </button>
-
-                        <button className="flex flex-1 items-center justify-center gap-2 rounded bg-[#0D9488] px-4 py-2 text-sm font-medium text-white hover:bg-[#0F766E]">
-                            <LockOpen size={16} />
-                            Admit to Berth
-                        </button>
-                    </div>
-                </aside>
-            </section>
-        </div>
-    );
-}
-
-function MetricCard({
-    label,
-    value,
-    meta,
-    icon,
-    progress,
-    warning = false,
-}: {
-    label: string;
-    value: string;
-    meta: string;
-    icon: React.ReactNode;
-    progress: string;
-    warning?: boolean;
-}) {
-    return (
-        <div className="rounded-lg border border-[#E2E8F0] bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-            <div className="flex justify-between">
-                <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-[#64748B]">
-                    {label}
-                </span>
-                <span className="text-[#64748B]">{icon}</span>
-            </div>
-
-            <div className="mt-3 flex items-baseline gap-2">
-                <span className="text-2xl font-semibold">{value}</span>
-                <span className="font-mono text-[10px] text-[#64748B]">
-                    {meta}
-                </span>
-            </div>
-
-            <div className="mt-3 h-1 overflow-hidden rounded-full bg-[#E2E8F0]">
+            {error && (
                 <div
-                    className={`h-full ${progress} ${warning ? "bg-[#D97706]" : "bg-[#0D9488]"
+                    role="alert"
+                    className="rounded-lg border border-[#FECACA] bg-[#FEF2F2] px-4 py-3"
+                >
+                    <p className="text-sm font-medium text-[#B91C1C]">
+                        Authorization API unavailable
+                    </p>
+
+                    <p className="mt-1 font-mono text-[11px] text-[#DC2626]">
+                        {error}
+                    </p>
+                </div>
+            )}
+
+            <section className="flex flex-wrap gap-2">
+                {TABS.map((tab) => (
+                    <button
+                        key={tab}
+                        type="button"
+                        onClick={() => {
+                            setActiveTab(tab);
+                            setPage(0);
+                        }}
+                        className={`rounded border px-3 py-1.5 text-xs transition ${
+                            activeTab === tab
+                                ? "border-[#0D9488] bg-[#0D9488]/5 text-[#0F766E]"
+                                : "border-[#E2E8F0] bg-white text-[#64748B] hover:border-[#CBD5E1]"
                         }`}
+                    >
+                        {tab}
+                        <span className="ml-2 font-mono text-[10px] text-[#94A3B8]">
+                            {countFor(tab)}
+                        </span>
+                    </button>
+                ))}
+            </section>
+
+            <section className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="relative flex-1">
+                    <Search
+                        size={15}
+                        className="absolute left-3 top-1/2 -translate-y-1/2 text-[#94A3B8]"
+                    />
+
+                    <input
+                        value={search}
+                        onChange={(event) => {
+                            setSearch(event.target.value);
+                            setPage(0);
+                        }}
+                        placeholder="Search decision, transaction, resource, actor…"
+                        className="w-full rounded border border-[#E2E8F0] bg-white py-2 pl-9 pr-3 text-xs outline-none focus:border-[#0D9488]"
+                    />
+                </div>
+
+                <select
+                    value={zone}
+                    onChange={(event) => {
+                        setZone(event.target.value);
+                        setPage(0);
+                    }}
+                    className="rounded border border-[#E2E8F0] bg-white px-3 py-2 font-mono text-[11px] outline-none focus:border-[#0D9488]"
+                >
+                    {zones.map((option) => (
+                        <option key={option} value={option}>
+                            {option}
+                        </option>
+                    ))}
+                </select>
+
+                <select
+                    value={sort}
+                    onChange={(event) => setSort(event.target.value as SortKey)}
+                    className="rounded border border-[#E2E8F0] bg-white px-3 py-2 font-mono text-[11px] outline-none focus:border-[#0D9488]"
+                >
+                    {Object.keys(SORTS).map((option) => (
+                        <option key={option} value={option}>
+                            {option}
+                        </option>
+                    ))}
+                </select>
+            </section>
+
+            <section className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
+                <div className="overflow-x-auto">
+                    <table className="w-full border-collapse text-left">
+                        <thead className="bg-[#F8FAFC]">
+                            <tr className="border-b border-[#E2E8F0]">
+                                {[
+                                    "Decision ID",
+                                    "Resource",
+                                    "Requested By",
+                                    "Zone",
+                                    "Value",
+                                    "Decided",
+                                    "Outcome",
+                                ].map((head) => (
+                                    <th
+                                        key={head}
+                                        className="px-4 py-3 text-[10px] font-medium uppercase tracking-wider text-[#64748B]"
+                                    >
+                                        {head}
+                                    </th>
+                                ))}
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            {rows.map((context) => {
+                                const decision = context.decision;
+                                const outcome = effectiveOutcome(decision);
+
+                                return (
+                                    <tr
+                                        key={decision.decision_id}
+                                        onClick={() =>
+                                            setOpenId(decision.decision_id)
+                                        }
+                                        className="cursor-pointer border-b border-[#F1F5F9] last:border-b-0 hover:bg-[#F8FAFC]"
+                                    >
+                                        <td className="px-4 py-3 font-mono text-xs">
+                                            {decision.decision_id}
+                                        </td>
+
+                                        <td className="px-4 py-3 font-mono text-xs">
+                                            {context.transaction?.resource_id ??
+                                                "—"}
+                                        </td>
+
+                                        <td className="px-4 py-3 font-mono text-[11px] text-[#64748B]">
+                                            {context.transaction?.actor_id ??
+                                                "—"}
+                                        </td>
+
+                                        <td className="px-4 py-3 font-mono text-[11px] text-[#64748B]">
+                                            {context.transaction?.zone ?? "—"}
+                                        </td>
+
+                                        <td className="px-4 py-3 font-mono text-[11px] text-[#64748B]">
+                                            {context.transaction
+                                                ? `$${context.transaction.value}`
+                                                : "—"}
+                                        </td>
+
+                                        <td className="px-4 py-3 font-mono text-[11px] text-[#64748B]">
+                                            {shortTime(decision.decided_at)}
+                                        </td>
+
+                                        <td className="px-4 py-3">
+                                            <OutcomeBadge
+                                                outcome={outcome}
+                                                awaiting={isAwaitingAuthority(
+                                                    decision
+                                                )}
+                                            />
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+
+                            {!rows.length && (
+                                <tr>
+                                    <td
+                                        colSpan={7}
+                                        className="px-4 py-16 text-center text-sm text-[#64748B]"
+                                    >
+                                        {loading
+                                            ? "Loading the authorization queue…"
+                                            : contexts.length
+                                              ? "No requests match these filters."
+                                              : "No authorization requests on record yet."}
+                                    </td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+
+                {visible.length > PAGE_SIZE && (
+                    <div className="flex items-center justify-between border-t border-[#F1F5F9] px-4 py-3">
+                        <p className="font-mono text-[11px] text-[#64748B]">
+                            {clampedPage * PAGE_SIZE + 1}–
+                            {Math.min(
+                                (clampedPage + 1) * PAGE_SIZE,
+                                visible.length
+                            )}{" "}
+                            of {visible.length}
+                        </p>
+
+                        <div className="flex items-center gap-1">
+                            <button
+                                type="button"
+                                onClick={() => setPage(Math.max(0, clampedPage - 1))}
+                                disabled={clampedPage === 0}
+                                className="rounded border border-[#E2E8F0] p-1.5 transition hover:border-[#0D9488] disabled:opacity-40"
+                                aria-label="Previous page"
+                            >
+                                <ChevronLeft size={14} />
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    setPage(Math.min(pageCount - 1, clampedPage + 1))
+                                }
+                                disabled={clampedPage >= pageCount - 1}
+                                className="rounded border border-[#E2E8F0] p-1.5 transition hover:border-[#0D9488] disabled:opacity-40"
+                                aria-label="Next page"
+                            >
+                                <ChevronRight size={14} />
+                            </button>
+                        </div>
+                    </div>
+                )}
+            </section>
+
+            {composerOpen && (
+                <Composer
+                    onClose={() => setComposerOpen(false)}
+                    onSubmitted={(message) => {
+                        setComposerOpen(false);
+                        setToast(message);
+                        reload();
+                    }}
                 />
-            </div>
+            )}
         </div>
     );
 }
 
-function StatusBadge({ status }: { status: RequestStatus }) {
-    const styles = {
-        PENDING:
-            "border-[#FEF3C7] bg-[#FFFBEB] text-[#B45309]",
-        SECONDARY:
-            "border-[#FEF3C7] bg-[#FFFBEB] text-[#B45309]",
-        APPROVED:
-            "border-[#CCFBF1] bg-[#F0FDFA] text-[#0F766E]",
-        DENIED:
-            "border-[#FEE2E2] bg-[#FEF2F2] text-[#B91C1C]",
-    };
+function OutcomeBadge({
+    outcome,
+    awaiting,
+}: {
+    outcome: DecisionOutcome;
+    awaiting: boolean;
+}) {
+    const label = awaiting ? "AWAITING AUTHORITY" : badgeLabel(outcome);
 
-    const dots = {
-        PENDING: "bg-[#D97706]",
-        SECONDARY: "bg-[#D97706]",
-        APPROVED: "bg-[#0D9488]",
-        DENIED: "bg-[#DC2626]",
-    };
+    const style = awaiting
+        ? "border-[#FEF3C7] bg-[#FFFBEB] text-[#B45309]"
+        : outcome === "APPROVE"
+          ? "border-[#CCFBF1] bg-[#F0FDFA] text-[#0F766E]"
+          : outcome === "HOLD"
+            ? "border-[#FEF3C7] bg-[#FFFBEB] text-[#B45309]"
+            : "border-[#FEE2E2] bg-[#FEF2F2] text-[#B91C1C]";
 
     return (
         <span
-            className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 font-mono text-[10px] ${styles[status]}`}
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 font-mono text-[10px] ${style}`}
         >
-            <span className={`h-1.5 w-1.5 rounded-full ${dots[status]}`} />
-            {status}
+            {label}
         </span>
     );
 }
 
-function DataTile({
-    label,
-    value,
-    meta,
-    icon,
+function RecordDetail({
+    context,
+    onBack,
 }: {
-    label: string;
-    value: string;
-    meta: string;
-    icon: React.ReactNode;
+    context: DecisionContext;
+    onBack: () => void;
 }) {
+    const decision = context.decision;
+    const transaction = context.transaction;
+    const evidence = context.evidence;
+    const resolution = decision.resolution;
+    const outcome = effectiveOutcome(decision);
+
     return (
-        <div className="rounded border border-[#E2E8F0] bg-[#F8FAFC] p-3">
-            <p className="font-mono text-[10px] uppercase text-[#64748B]">
-                {label}
-            </p>
+        <div className="flex w-full flex-col gap-6">
+            <section className="flex flex-col justify-between gap-4 border-b border-[#E2E8F0] pb-4 lg:flex-row lg:items-end">
+                <div>
+                    <button
+                        type="button"
+                        onClick={onBack}
+                        className="mb-2 flex items-center gap-1.5 font-mono text-[11px] text-[#0D9488] transition hover:text-[#0F766E]"
+                    >
+                        <ChevronLeft size={14} />
+                        BACK TO QUEUE
+                    </button>
 
-            <div className="mt-1 flex items-center gap-1 text-[#0D9488]">
-                {icon}
-                <span className="font-mono text-xs font-medium text-[#0F172A]">
-                    {value}
-                </span>
-            </div>
+                    <h1 className="text-2xl font-semibold uppercase tracking-tight text-[#0F172A]">
+                        {transaction
+                            ? `${transaction.action} · ${transaction.resource_id}`
+                            : decision.decision_id}
+                    </h1>
 
-            <p className="mt-1 font-mono text-[10px] text-[#64748B]">
-                {meta}
-            </p>
+                    <p className="mt-1 font-mono text-[11px] text-[#64748B]">
+                        {decision.decision_id} · {decision.transaction_id}
+                    </p>
+                </div>
+
+                <OutcomeBadge
+                    outcome={outcome}
+                    awaiting={isAwaitingAuthority(decision)}
+                />
+            </section>
+
+            <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                <Panel title="Policy Outcome">
+                    {decision.reasons.map((reason) => (
+                        <p
+                            key={reason}
+                            className="mb-2 text-sm leading-relaxed text-[#0F172A]"
+                        >
+                            {reason}
+                        </p>
+                    ))}
+
+                    <Field
+                        label="Decision source"
+                        value={
+                            resolution
+                                ? "AUTHORIZED HUMAN"
+                                : "DETERMINISTIC POLICY"
+                        }
+                    />
+
+                    {decision.required_authority && (
+                        <Field
+                            label="Required authority"
+                            value={decision.required_authority}
+                        />
+                    )}
+
+                    <Field
+                        label="Decided at"
+                        value={shortStamp(decision.decided_at)}
+                    />
+                </Panel>
+
+                <Panel title="Requested Action">
+                    {transaction ? (
+                        <>
+                            <Field label="Actor" value={transaction.actor_id} />
+                            <Field label="Action" value={transaction.action} />
+                            <Field
+                                label="Resource"
+                                value={transaction.resource_id}
+                            />
+                            <Field label="Zone" value={transaction.zone} />
+                            <Field
+                                label="Value"
+                                value={`$${transaction.value}`}
+                            />
+                            <Field
+                                label="Requested"
+                                value={shortStamp(transaction.timestamp)}
+                            />
+
+                            {Object.entries(transaction.metadata ?? {}).map(
+                                ([key, value]) => (
+                                    <Field key={key} label={key} value={value} />
+                                )
+                            )}
+                        </>
+                    ) : (
+                        <p className="text-sm text-[#64748B]">
+                            The transaction behind this decision is no longer on
+                            record.
+                        </p>
+                    )}
+                </Panel>
+
+                <Panel title="Network Evidence">
+                    {evidence ? (
+                        <>
+                            <EvidenceRow
+                                label="Number verified"
+                                state={evidence.number_verified}
+                            />
+                            <EvidenceRow
+                                label="Location verified"
+                                state={evidence.location_verified}
+                            />
+                            <EvidenceRow
+                                label="Recent SIM swap"
+                                state={evidence.recent_sim_swap}
+                                invert
+                            />
+                            <EvidenceRow
+                                label="Recent device swap"
+                                state={evidence.recent_device_swap}
+                                invert
+                            />
+                            <EvidenceRow
+                                label="Device reachable"
+                                state={evidence.reachable}
+                            />
+
+                            {context.evidence_plan && (
+                                <p className="mt-3 font-mono text-[10px] leading-relaxed text-[#94A3B8]">
+                                    Collected:{" "}
+                                    {context.evidence_plan.combined.join(", ") ||
+                                        "none"}
+                                </p>
+                            )}
+                        </>
+                    ) : (
+                        <p className="text-sm text-[#64748B]">
+                            No evidence was recorded for this decision.
+                        </p>
+                    )}
+                </Panel>
+
+                <Panel title="Agent Assessment (Advisory)">
+                    {decision.context_evaluation ? (
+                        <>
+                            <div className="mb-3 flex flex-wrap gap-1.5">
+                                {decision.context_evaluation.risk_factors.map(
+                                    (factor) => (
+                                        <span
+                                            key={factor}
+                                            className="rounded bg-[#F1F5F9] px-2 py-1 font-mono text-[10px] text-[#0F172A]"
+                                        >
+                                            {factor}
+                                        </span>
+                                    )
+                                )}
+                            </div>
+
+                            <p className="text-sm italic leading-relaxed text-[#0F172A]">
+                                {decision.context_evaluation.rationale}
+                            </p>
+
+                            <p className="mt-3 font-mono text-[10px] text-[#94A3B8]">
+                                Recommended:{" "}
+                                {
+                                    decision.context_evaluation
+                                        .recommended_control
+                                }{" "}
+                                — advisory only, never binding
+                            </p>
+                        </>
+                    ) : (
+                        <p className="text-sm leading-relaxed text-[#64748B]">
+                            No agent assessment was recorded. Evidence planning
+                            fell back to the mandatory baseline and the decision
+                            was made on network facts alone.
+                        </p>
+                    )}
+                </Panel>
+
+                {resolution && (
+                    <Panel title="Human Resolution">
+                        <Field
+                            label="Final outcome"
+                            value={resolution.outcome}
+                        />
+                        <Field
+                            label="Decided by"
+                            value={resolution.resolved_by}
+                        />
+                        <Field
+                            label="Authority"
+                            value={resolution.authority_role}
+                        />
+                        <Field
+                            label="Decided at"
+                            value={shortStamp(resolution.resolved_at)}
+                        />
+
+                        {resolution.note && (
+                            <p className="mt-3 text-sm leading-relaxed text-[#64748B]">
+                                {resolution.note}
+                            </p>
+                        )}
+                    </Panel>
+                )}
+
+                {context.receipt?.token && (
+                    <Panel title="Scoped Authorization Token">
+                        <p className="break-all font-mono text-[10px] leading-relaxed text-[#0F172A]">
+                            {context.receipt.token}
+                        </p>
+
+                        <p className="mt-2 text-xs text-[#94A3B8]">
+                            Bound to this actor, action, resource and zone.
+                        </p>
+                    </Panel>
+                )}
+            </section>
         </div>
     );
 }
 
-function InfoRow({
+function Panel({
+    title,
+    children,
+}: {
+    title: string;
+    children: React.ReactNode;
+}) {
+    return (
+        <div className="rounded-lg border border-[#E2E8F0] bg-white">
+            <div className="border-b border-[#F1F5F9] px-4 py-3">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
+                    {title}
+                </p>
+            </div>
+
+            <div className="p-4">{children}</div>
+        </div>
+    );
+}
+
+function Field({ label, value }: { label: string; value: string }) {
+    return (
+        <div className="flex items-start justify-between gap-4 py-1.5">
+            <span className="text-xs text-[#64748B]">{label}</span>
+
+            <span className="text-right font-mono text-[11px] font-medium text-[#0F172A]">
+                {value}
+            </span>
+        </div>
+    );
+}
+
+function EvidenceRow({
+    label,
+    state,
+    invert = false,
+}: {
+    label: string;
+    state: boolean | null;
+    /** For swap checks a `true` reading is the bad outcome. */
+    invert?: boolean;
+}) {
+    const good = state === null ? null : invert ? !state : state;
+
+    const style =
+        good === null
+            ? "border-[#E2E8F0] bg-[#F1F5F9] text-[#64748B]"
+            : good
+              ? "border-[#CCFBF1] bg-[#F0FDFA] text-[#0F766E]"
+              : "border-[#FEE2E2] bg-[#FEF2F2] text-[#B91C1C]";
+
+    const text =
+        state === null ? "NOT COLLECTED" : state ? "TRUE" : "FALSE";
+
+    return (
+        <div className="flex items-center justify-between py-1.5">
+            <span className="text-sm text-[#0F172A]">{label}</span>
+
+            <span
+                className={`rounded border px-2 py-0.5 font-mono text-[10px] ${style}`}
+            >
+                {text}
+            </span>
+        </div>
+    );
+}
+
+/**
+ * Runs a transaction through the real pipeline.
+ *
+ * The console does not record an outcome of its own: it posts the transaction
+ * and shows whatever the policy engine answered.
+ */
+function Composer({
+    onClose,
+    onSubmitted,
+}: {
+    onClose: () => void;
+    onSubmitted: (message: string) => void;
+}) {
+    const [actorId, setActorId] = useState("usr_cargo_operator_01");
+    const [resourceId, setResourceId] = useState("");
+    const [zone, setZone] = useState("PORT_GATE_17");
+    const [value, setValue] = useState("25000.00");
+    const [carrier, setCarrier] = useState("");
+
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const submit = async (event: React.FormEvent) => {
+        event.preventDefault();
+
+        if (!resourceId.trim()) {
+            setError("Enter the container or resource identifier.");
+            return;
+        }
+
+        setBusy(true);
+        setError(null);
+
+        const now = new Date();
+
+        try {
+            const result = await requestAuthorization({
+                transaction_id: `tx_console_${now.getTime()}`,
+                actor_id: actorId.trim(),
+                action: "RELEASE_CARGO",
+                resource_id: resourceId.trim(),
+                zone: zone.trim(),
+                timestamp: now.toISOString(),
+                value: value.trim() || "0.0",
+                // Free-form; only what an operator actually typed goes here.
+                metadata: carrier.trim() ? { carrier: carrier.trim() } : {},
+            });
+
+            const decision = result.decision;
+            const label = isAwaitingAuthority(decision)
+                ? `HOLD — handed to ${decision.required_authority ?? "an authority"}`
+                : decision.decision;
+
+            onSubmitted(
+                `${decision.decision_id}: ${label}`
+            );
+        } catch (caught) {
+            setError(
+                caught instanceof ApiError
+                    ? caught.message
+                    : "Unexpected error submitting the authorization"
+            );
+            setBusy(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0F172A]/40 p-4">
+            <div className="w-full max-w-lg rounded-lg border border-[#E2E8F0] bg-white">
+                <div className="flex items-center justify-between border-b border-[#F1F5F9] px-4 py-3">
+                    <div>
+                        <p className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
+                            New Authorization
+                        </p>
+
+                        <p className="mt-0.5 text-xs text-[#94A3B8]">
+                            Runs the full evidence and policy pipeline
+                        </p>
+                    </div>
+
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="rounded p-1 text-[#64748B] transition hover:bg-[#F1F5F9]"
+                        aria-label="Close"
+                    >
+                        <X size={16} />
+                    </button>
+                </div>
+
+                <form onSubmit={submit} className="flex flex-col gap-3 p-4">
+                    <Input
+                        label="Actor ID"
+                        value={actorId}
+                        onChange={setActorId}
+                    />
+
+                    <Input
+                        label="Container / Resource"
+                        value={resourceId}
+                        onChange={setResourceId}
+                        placeholder="CT-928411"
+                    />
+
+                    <Input label="Target Zone" value={zone} onChange={setZone} />
+
+                    <Input
+                        label="Declared Value (USD)"
+                        value={value}
+                        onChange={setValue}
+                    />
+
+                    <Input
+                        label="Carrier (optional)"
+                        value={carrier}
+                        onChange={setCarrier}
+                        placeholder="Recorded as transaction metadata"
+                    />
+
+                    {error && (
+                        <p className="rounded border border-[#FECACA] bg-[#FEF2F2] px-3 py-2 font-mono text-[11px] text-[#B91C1C]">
+                            {error}
+                        </p>
+                    )}
+
+                    <div className="mt-1 flex items-center justify-end gap-2">
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="rounded border border-[#E2E8F0] px-3 py-2 text-xs text-[#64748B] transition hover:border-[#CBD5E1]"
+                        >
+                            Cancel
+                        </button>
+
+                        <button
+                            type="submit"
+                            disabled={busy}
+                            className="rounded bg-[#0D9488] px-4 py-2 text-xs font-semibold text-white transition hover:bg-[#0F766E] disabled:opacity-50"
+                        >
+                            {busy ? "Evaluating…" : "Request Authorization"}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+}
+
+function Input({
     label,
     value,
+    onChange,
+    placeholder,
 }: {
     label: string;
     value: string;
+    onChange: (next: string) => void;
+    placeholder?: string;
 }) {
     return (
-        <div className="flex justify-between border-b border-[#E2E8F0] pb-1 last:border-b-0">
-            <span>{label.toUpperCase()}</span>
-            <span className="font-medium text-[#0F172A]">{value}</span>
-        </div>
+        <label className="flex flex-col gap-1">
+            <span className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
+                {label}
+            </span>
+
+            <input
+                value={value}
+                placeholder={placeholder}
+                onChange={(event) => onChange(event.target.value)}
+                className="rounded border border-[#E2E8F0] bg-white px-3 py-2 font-mono text-xs outline-none focus:border-[#0D9488]"
+            />
+        </label>
     );
 }

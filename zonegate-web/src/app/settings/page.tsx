@@ -10,38 +10,27 @@ import {
     MoreHorizontal,
     Plus,
     RefreshCw,
-    Server,
     Settings2,
     ShieldCheck,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-const zones = [
-    {
-        name: "Port Gate 17",
-        code: "BERTH-B // LANES 01-04",
-        type: "Port Turnstile & Barrier",
-        staff: "24 Staff",
-    },
-    {
-        name: "Warehouse A",
-        code: "COLD-STORAGE FACILITY",
-        type: "High-Density Warehouse",
-        staff: "18 Staff",
-    },
-    {
-        name: "Warehouse B",
-        code: "BONDED SECURE YARD",
-        type: "High-Density Warehouse",
-        staff: "12 Staff",
-    },
-    {
-        name: "Loading Zone 3",
-        code: "GANTRY CRANE PLATFORM 03",
-        type: "Loading & Staging Area",
-        staff: "9 Staff",
-    },
-];
+import { useStoredValue } from "@/components/useStoredValue";
+import {
+    ApiError,
+    getPolicyConfig,
+    listDecisionContexts,
+    updatePolicyConfig,
+    type PolicyConfig,
+} from "@/lib/api";
+
+type Zone = {
+    name: string;
+    code: string;
+    type: string;
+    staff: string;
+    enabled: boolean;
+};
 
 const policies = [
     {
@@ -71,33 +60,392 @@ const policies = [
     },
 ];
 
-export default function SettingsPage() {
-    const [defaultView, setDefaultView] = useState("all");
-
-    const [securitySettings, setSecuritySettings] = useState({
-        deterministic: true,
-        manualApproval: true,
-        deviceBinding: true,
-        anomalyLockout: true,
-    });
-
-    const [notifications, setNotifications] = useState({
+const DEFAULT_CONFIG = {
+    organization: "ZoneGate Logistics Global Berth",
+    timezone: "UTC +03:00 (Kuwait, Riyadh, Nairobi)",
+    locale: "English (US) - UTF-8 Compliant",
+    dateFormat: "DD/MM/YYYY \u00b7 24-hour (ISO 8601 Tabular)",
+    defaultView: "all",
+    notifications: {
         denied: true,
         hold: true,
         nodeOffline: true,
         policyChanges: false,
-    });
+    },
+};
+
+type Config = typeof DEFAULT_CONFIG;
+
+const STORAGE_KEY = "zonegate.settings";
+
+function parseConfig(raw: string | null): Config {
+    if (!raw) return DEFAULT_CONFIG;
+
+    try {
+        return { ...DEFAULT_CONFIG, ...JSON.parse(raw) } as Config;
+    } catch {
+        // A malformed store just leaves the defaults in place.
+        return DEFAULT_CONFIG;
+    }
+}
+
+export default function SettingsPage() {
+    // The last committed configuration for this browser seeds the editor.
+    // Keying on it swaps in the restored values without an effect.
+    const stored = useStoredValue(STORAGE_KEY);
+
+    return <SettingsEditor key={stored ?? "defaults"} initial={parseConfig(stored)} />;
+}
+
+/**
+ * The thresholds the deterministic engine evaluates against.
+ *
+ * These are the only settings on this page that change how the backend
+ * behaves; everything else is a display preference for this browser. Saving
+ * here applies immediately to transactions evaluated from that point on —
+ * decisions already recorded keep the reasons they were given.
+ */
+function PolicyThresholds() {
+    const [config, setConfig] = useState<PolicyConfig | null>(null);
+    const [draft, setDraft] = useState<PolicyConfig | null>(null);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [note, setNote] = useState<string | null>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        getPolicyConfig()
+            .then((loaded) => {
+                if (cancelled) return;
+                setConfig(loaded);
+                setDraft(loaded);
+                setError(null);
+            })
+            .catch((caught) => {
+                if (cancelled) return;
+                setError(
+                    caught instanceof ApiError
+                        ? caught.message
+                        : "Unexpected error loading the policy configuration"
+                );
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    const dirty =
+        config !== null &&
+        draft !== null &&
+        JSON.stringify(config) !== JSON.stringify(draft);
+
+    const save = async () => {
+        if (!draft) return;
+
+        setBusy(true);
+        setError(null);
+        setNote(null);
+
+        try {
+            const applied = await updatePolicyConfig(draft);
+            setConfig(applied);
+            setDraft(applied);
+            setNote("Applied to the running policy engine.");
+        } catch (caught) {
+            setError(
+                caught instanceof ApiError
+                    ? caught.message
+                    : "Unexpected error saving the policy configuration"
+            );
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    if (error && !draft) {
+        return (
+            <p className="rounded border border-[#FECACA] bg-[#FEF2F2] px-3 py-2 font-mono text-[11px] text-[#B91C1C]">
+                {error}
+            </p>
+        );
+    }
+
+    if (!draft) {
+        return (
+            <p className="text-xs text-[#94A3B8]">
+                Loading the policy configuration…
+            </p>
+        );
+    }
+
+    return (
+        <div className="rounded border border-[#E2E8F0] bg-white p-4">
+            <div className="mb-3 flex items-center justify-between">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
+                    Live Engine Thresholds
+                </p>
+
+                <span className="rounded-full border border-[#0D9488]/30 bg-[#F0FDFA] px-2 py-0.5 font-mono text-[10px] text-[#0F766E]">
+                    APPLIES TO NEW DECISIONS
+                </span>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <label className="flex flex-col gap-1">
+                    <span className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
+                        High-value threshold (USD)
+                    </span>
+
+                    <input
+                        value={draft.high_value_threshold}
+                        onChange={(event) =>
+                            setDraft({
+                                ...draft,
+                                high_value_threshold: event.target.value,
+                            })
+                        }
+                        className="rounded border border-[#E2E8F0] px-3 py-2 font-mono text-xs outline-none focus:border-[#0D9488]"
+                    />
+                </label>
+
+                <label className="flex flex-col gap-1">
+                    <span className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
+                        Window opens (UTC hour)
+                    </span>
+
+                    <input
+                        type="number"
+                        min={0}
+                        max={23}
+                        value={draft.window_start_hour}
+                        onChange={(event) =>
+                            setDraft({
+                                ...draft,
+                                window_start_hour: Number(event.target.value),
+                            })
+                        }
+                        className="rounded border border-[#E2E8F0] px-3 py-2 font-mono text-xs outline-none focus:border-[#0D9488]"
+                    />
+                </label>
+
+                <label className="flex flex-col gap-1">
+                    <span className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
+                        Window closes (UTC hour)
+                    </span>
+
+                    <input
+                        type="number"
+                        min={1}
+                        max={24}
+                        value={draft.window_end_hour}
+                        onChange={(event) =>
+                            setDraft({
+                                ...draft,
+                                window_end_hour: Number(event.target.value),
+                            })
+                        }
+                        className="rounded border border-[#E2E8F0] px-3 py-2 font-mono text-xs outline-none focus:border-[#0D9488]"
+                    />
+                </label>
+            </div>
+
+            <p className="mt-3 text-xs leading-relaxed text-[#64748B]">
+                A request at or above the threshold, made outside the window, is
+                held for{" "}
+                <span className="font-mono text-[11px]">
+                    ROLE_CARGO_SUPERVISOR
+                </span>{" "}
+                rather than approved.
+            </p>
+
+            {error && (
+                <p className="mt-3 rounded border border-[#FECACA] bg-[#FEF2F2] px-3 py-2 font-mono text-[11px] text-[#B91C1C]">
+                    {error}
+                </p>
+            )}
+
+            {note && !dirty && (
+                <p className="mt-3 font-mono text-[11px] text-[#0F766E]">{note}</p>
+            )}
+
+            <div className="mt-4 flex items-center gap-2">
+                <button
+                    type="button"
+                    onClick={save}
+                    disabled={!dirty || busy}
+                    className="rounded bg-[#0D9488] px-4 py-2 text-xs font-semibold text-white transition hover:bg-[#0F766E] disabled:opacity-50"
+                >
+                    {busy ? "Applying…" : "Apply to Engine"}
+                </button>
+
+                <button
+                    type="button"
+                    onClick={() => setDraft(config)}
+                    disabled={!dirty || busy}
+                    className="rounded border border-[#E2E8F0] px-3 py-2 text-xs text-[#64748B] transition hover:border-[#CBD5E1] disabled:opacity-50"
+                >
+                    Discard
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function SettingsEditor({ initial }: { initial: Config }) {
+    const [saved, setSaved] = useState<Config>(initial);
+    const [draft, setDraft] = useState<Config>(initial);
+    // Only zones a decision has actually targeted are real; the console does
+    // not get to invent a perimeter the backend has never seen.
+    const [zones, setZones] = useState<Zone[]>([]);
+    const [zonesLoading, setZonesLoading] = useState(true);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        listDecisionContexts({ limit: 500 })
+            .then((contexts) => {
+                if (cancelled) return;
+
+                const totals = new Map<string, number>();
+                for (const context of contexts) {
+                    const zone = context.transaction?.zone;
+                    if (!zone) continue;
+                    totals.set(zone, (totals.get(zone) ?? 0) + 1);
+                }
+
+                setZones(
+                    [...totals.entries()]
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([name, count]) => ({
+                            name,
+                            code: `${count} DECISION${count === 1 ? "" : "S"} ON RECORD`,
+                            type: "Geofence referenced by the policy engine",
+                            staff: "—",
+                            enabled: true,
+                        }))
+                );
+            })
+            .catch(() => {
+                // The zone list is informational; a failure leaves it empty.
+            })
+            .finally(() => {
+                if (!cancelled) setZonesLoading(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+    const [zoneFormOpen, setZoneFormOpen] = useState(false);
+    const [toast, setToast] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (!toast) return;
+
+        const id = window.setTimeout(() => setToast(null), 2600);
+        return () => window.clearTimeout(id);
+    }, [toast]);
+
+    const dirty = useMemo(
+        () => JSON.stringify(draft) !== JSON.stringify(saved),
+        [draft, saved]
+    );
+
+    const commit = () => {
+        setSaved(draft);
+
+        try {
+            window.localStorage.setItem(STORAGE_KEY, JSON.stringify(draft));
+        } catch {
+            // Storage can be unavailable; the in-memory state is still updated.
+        }
+
+        setToast("Configuration committed to node");
+    };
+
+    const revert = () => {
+        setDraft(saved);
+        setToast("Changes discarded");
+    };
+
+    const exportConfig = () => {
+        const payload = JSON.stringify(
+            { config: draft, zones, policies },
+            null,
+            2
+        );
+
+        const blob = new Blob([payload], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "zonegate-config.json";
+        link.click();
+
+        URL.revokeObjectURL(url);
+    };
+
+    const addZone = (zone: Zone) => {
+        setZones((current) => [...current, zone]);
+        setZoneFormOpen(false);
+        setToast(zone.name + " added");
+    };
+
+    const toggleZone = (name: string) => {
+        setZones((current) =>
+            current.map((zone) =>
+                zone.name === name ? { ...zone, enabled: !zone.enabled } : zone
+            )
+        );
+    };
+
+    const renameZone = (name: string) => {
+        const next = window.prompt("Zone designation", name);
+        if (!next || !next.trim()) return;
+
+        setZones((current) =>
+            current.map((zone) =>
+                zone.name === name ? { ...zone, name: next.trim() } : zone
+            )
+        );
+        setToast("Zone renamed");
+    };
+
+    const defaultView = draft.defaultView;
+    const setDefaultView = (value: string) =>
+        setDraft((current) => ({ ...current, defaultView: value }));
+
+    const notifications = draft.notifications;
+    const setNotifications = (
+        update: (previous: Config["notifications"]) => Config["notifications"]
+    ) =>
+        setDraft((current) => ({
+            ...current,
+            notifications: update(current.notifications),
+        }));
 
     return (
         <div className="flex w-full flex-col gap-6">
+            {toast && (
+                <div
+                    role="status"
+                    className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded border border-[#0D9488]/40 bg-[#0F172A] px-4 py-2.5 font-mono text-[11px] text-white shadow-lg"
+                >
+                    {toast}
+                </div>
+            )}
+
             {/* PAGE HEADER */}
             <section className="flex flex-col justify-between gap-4 border-b border-[#E2E8F0] pb-5 lg:flex-row lg:items-end">
                 <div>
                     <div className="mb-2 flex flex-wrap items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-[#64748B]">
-                        <span>Configuration & Policy Engine</span>
-                        <span>//</span>
+                        <span>Configuration &amp; Policy Engine</span>
+                        <span>{"//"}</span>
                         <span>NODE_T4_CONF</span>
-                        <span>//</span>
+                        <span>{"//"}</span>
                         <span className="font-semibold text-[#0D9488]">
                             System Integrity Verified
                         </span>
@@ -121,111 +469,30 @@ export default function SettingsPage() {
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                    <button className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-wider transition hover:border-[#0F172A]">
+                    <button
+                        type="button"
+                        onClick={exportConfig}
+                        className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-wider transition hover:border-[#0F172A] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D9488]"
+                    >
                         <Download size={15} className="text-[#64748B]" />
                         Export Config (.json)
                     </button>
 
-                    <button className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-wider transition hover:border-[#0F172A]">
+                    <button
+                        type="button"
+                        onClick={commit}
+                        disabled={!dirty}
+                        className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-wider transition hover:border-[#0F172A] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D9488] disabled:cursor-not-allowed disabled:opacity-45"
+                    >
                         <RefreshCw size={15} className="text-[#64748B]" />
-                        Commit Node
+                        {dirty ? "Commit Node" : "Node Committed"}
                     </button>
                 </div>
             </section>
 
-            <section className="grid grid-cols-1 items-start gap-6 lg:grid-cols-12">
-                {/* LEFT NAV */}
-                <aside className="flex flex-col gap-4 lg:sticky lg:top-20 lg:col-span-3">
-                    <div className="rounded-lg border border-[#E2E8F0] bg-white p-2 shadow-sm">
-                        <div className="border-b border-[#E2E8F0] px-3 py-2">
-                            <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-[#64748B]">
-                                Control Subsections
-                            </span>
-                        </div>
+            <section className="flex flex-col">
 
-                        <nav className="flex flex-col gap-1 pt-2">
-                            <SubNavItem
-                                href="#general"
-                                icon={<Settings2 size={16} />}
-                                label="General"
-                                active
-                            />
-
-                            <SubNavItem
-                                href="#zones"
-                                icon={<MapPin size={16} />}
-                                label="Locations & Zones"
-                                meta="4"
-                            />
-
-                            <SubNavItem
-                                href="#policies"
-                                icon={<Gavel size={16} />}
-                                label="Authorization Policies"
-                                meta="5"
-                            />
-
-                            <SubNavItem
-                                href="#security"
-                                icon={<Lock size={16} />}
-                                label="Security"
-                                dot
-                            />
-
-                            <SubNavItem
-                                href="#notifications"
-                                icon={<Bell size={16} />}
-                                label="Notifications"
-                                meta="7 ACT"
-                            />
-                        </nav>
-                    </div>
-
-                    {/* HARDWARE NODE */}
-                    <div className="rounded-lg border border-[#E2E8F0] bg-white p-4 shadow-sm">
-                        <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-2">
-                            <span className="font-mono text-[10px] uppercase text-[#64748B]">
-                                Hardware Node ID
-                            </span>
-
-                            <span className="font-mono text-[11px] text-[#0F172A]">
-                                ZK-904-HX
-                            </span>
-                        </div>
-
-                        <div className="mt-3">
-                            <div className="flex justify-between font-mono text-[10px] text-[#64748B]">
-                                <span>RAM Allocation</span>
-                                <span className="text-[#0F172A]">2.8 GB / 8.0 GB</span>
-                            </div>
-
-                            <div className="mt-2 h-1 overflow-hidden rounded-full bg-[#F1F5F9]">
-                                <div className="h-full w-[35%] bg-[#0D9488]" />
-                            </div>
-                        </div>
-
-                        <div className="mt-4 flex justify-between font-mono text-[10px] text-[#64748B]">
-                            <span>Firmware Checksum</span>
-                            <span className="text-[#0F172A]">0x8b32..4f9</span>
-                        </div>
-
-                        <div className="mt-4 flex items-center gap-2 rounded border border-[#CCFBF1] bg-[#F0FDFA] p-2">
-                            <Server size={15} className="text-[#0D9488]" />
-
-                            <div>
-                                <p className="font-mono text-[10px] font-semibold text-[#0F766E]">
-                                    NODE HEALTHY
-                                </p>
-                                <p className="font-mono text-[9px] text-[#64748B]">
-                                    UPTIME 99.998%
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-                </aside>
-
-                {/* RIGHT CONTENT */}
-                <div className="flex flex-col gap-8 lg:col-span-9">
+                <div className="flex flex-col gap-8">
                     {/* GENERAL */}
                     <SettingsSection
                         id="general"
@@ -238,12 +505,27 @@ export default function SettingsPage() {
                             <Field label="Organization Name">
                                 <input
                                     className={inputStyle}
-                                    defaultValue="ZoneGate Logistics Global Berth"
+                                    value={draft.organization}
+                                    onChange={(event) =>
+                                        setDraft((current) => ({
+                                            ...current,
+                                            organization: event.target.value,
+                                        }))
+                                    }
                                 />
                             </Field>
 
                             <Field label="Node Timezone Standard">
-                                <select className={inputStyle}>
+                                <select
+                                    className={inputStyle}
+                                    value={draft.timezone}
+                                    onChange={(event) =>
+                                        setDraft((current) => ({
+                                            ...current,
+                                            timezone: event.target.value,
+                                        }))
+                                    }
+                                >
                                     <option>
                                         UTC +03:00 (Kuwait, Riyadh, Nairobi)
                                     </option>
@@ -296,7 +578,7 @@ export default function SettingsPage() {
                             </div>
                         </div>
 
-                        <SectionActions />
+                        <SectionActions dirty={dirty} onSave={commit} onCancel={revert} />
                     </SettingsSection>
 
                     {/* LOCATIONS */}
@@ -306,7 +588,11 @@ export default function SettingsPage() {
                         title="Locations & Zones"
                         description="Manage physical perimeter barriers, geofence anchors, and operational authorization zones."
                         action={
-                            <button className={primaryButton}>
+                            <button
+                                type="button"
+                                onClick={() => setZoneFormOpen(true)}
+                                className={primaryButton}
+                            >
                                 <Plus size={15} />
                                 Add Zone
                             </button>
@@ -334,10 +620,23 @@ export default function SettingsPage() {
                                 </thead>
 
                                 <tbody className="divide-y divide-[#E2E8F0]">
+                                    {!zones.length && (
+                                        <tr>
+                                            <td
+                                                colSpan={5}
+                                                className="px-4 py-10 text-center text-xs text-[#64748B]"
+                                            >
+                                                {zonesLoading
+                                                    ? "Loading zones from the decision log…"
+                                                    : "No zone has been referenced by a decision yet."}
+                                            </td>
+                                        </tr>
+                                    )}
+
                                     {zones.map((zone) => (
                                         <tr
                                             key={zone.name}
-                                            className="transition hover:bg-[#F8FAFC]"
+                                            className={`transition hover:bg-[#F8FAFC] ${zone.enabled ? "" : "opacity-55"}`}
                                         >
                                             <td className="px-4 py-3">
                                                 <p className="font-mono text-xs font-semibold">
@@ -353,7 +652,7 @@ export default function SettingsPage() {
                                             </td>
 
                                             <td className="px-4 py-3">
-                                                <ActiveBadge />
+                                                <ActiveBadge enabled={zone.enabled} />
                                             </td>
 
                                             <td className="px-4 py-3 text-right font-mono text-xs">
@@ -362,12 +661,20 @@ export default function SettingsPage() {
 
                                             <td className="px-4 py-3">
                                                 <div className="flex justify-end gap-1">
-                                                    <button className="rounded px-2 py-1 font-mono text-[10px] hover:bg-[#F1F5F9]">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => renameZone(zone.name)}
+                                                        className="rounded px-2 py-1 font-mono text-[10px] hover:bg-[#F1F5F9] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D9488]"
+                                                    >
                                                         Edit
                                                     </button>
 
-                                                    <button className="rounded px-2 py-1 font-mono text-[10px] text-[#64748B] hover:bg-[#FEF2F2] hover:text-[#DC2626]">
-                                                        Disable
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => toggleZone(zone.name)}
+                                                        className="rounded px-2 py-1 font-mono text-[10px] text-[#64748B] hover:bg-[#FEF2F2] hover:text-[#DC2626] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D9488]"
+                                                    >
+                                                        {zone.enabled ? "Disable" : "Enable"}
                                                     </button>
 
                                                     <button
@@ -390,20 +697,38 @@ export default function SettingsPage() {
                         id="policies"
                         icon={<Gavel size={18} />}
                         title="Authorization Policies"
-                        description="Configure mathematical evidence requirements and rule chains for mission-critical operations."
+                        description="Thresholds an operations lead can retune. The rules themselves are owned by the deterministic engine."
                         action={
                             <div className="flex gap-2">
-                                <button className={secondaryButton}>
+                                <button
+                                    type="button"
+                                    onClick={() =>
+                                        setToast(
+                                            "Policy rules are owned by the deterministic engine and are read-only here"
+                                        )
+                                    }
+                                    className={secondaryButton}
+                                >
                                     Edit Policy
                                 </button>
 
-                                <button className={primaryButton}>
+                                <button
+                                    type="button"
+                                    onClick={() =>
+                                        setToast(
+                                            "Rule authoring ships with the policy engine console"
+                                        )
+                                    }
+                                    className={primaryButton}
+                                >
                                     <Plus size={15} />
                                     Create Rule
                                 </button>
                             </div>
                         }
                     >
+                        <PolicyThresholds />
+
                         <div className="flex gap-3 rounded-r border-l-2 border-[#0D9488] bg-[#F8FAFC] p-4">
                             <ShieldCheck
                                 size={19}
@@ -507,55 +832,35 @@ export default function SettingsPage() {
                         description="Configure system-level boundaries, credential enforcement, and manual override safeguards."
                         section="04"
                     >
+
                         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                            <ToggleCard
+                            <EnforcedCard
                                 title="Deterministic Policy Enforcement"
-                                description="Prevent runtime AI components from modifying authorization policy."
-                                checked={securitySettings.deterministic}
-                                onChange={() =>
-                                    setSecuritySettings((prev) => ({
-                                        ...prev,
-                                        deterministic: !prev.deterministic,
-                                    }))
-                                }
+                                description="The agent's assessment is advisory input. It cannot reach or change a decision."
                             />
 
-                            <ToggleCard
+                            <EnforcedCard
                                 title="Human Approval for HOLD"
-                                description="Require an authorized officer to resolve every HOLD decision."
-                                checked={securitySettings.manualApproval}
-                                onChange={() =>
-                                    setSecuritySettings((prev) => ({
-                                        ...prev,
-                                        manualApproval: !prev.manualApproval,
-                                    }))
-                                }
+                                description="A HOLD is only ever cleared by a named authority; the engine never resolves one itself."
                             />
 
-                            <ToggleCard
+                            <EnforcedCard
                                 title="Trusted Device Binding"
-                                description="Enforce registered hardware identity for high-value operations."
-                                checked={securitySettings.deviceBinding}
-                                onChange={() =>
-                                    setSecuritySettings((prev) => ({
-                                        ...prev,
-                                        deviceBinding: !prev.deviceBinding,
-                                    }))
-                                }
+                                description="Every carrier call is made against the actor's bound device, or the request is denied."
                             />
 
-                            <ToggleCard
-                                title="Automatic Anomaly Lockout"
-                                description="Immediately isolate requests with critical telemetry mismatches."
-                                checked={securitySettings.anomalyLockout}
-                                onChange={() =>
-                                    setSecuritySettings((prev) => ({
-                                        ...prev,
-                                        anomalyLockout: !prev.anomalyLockout,
-                                    }))
-                                }
+                            <EnforcedCard
+                                title="Evidence Before Decision"
+                                description="A decision is only reached once the Gateway has returned its evidence."
                             />
                         </div>
+
+                        <p className="text-xs leading-relaxed text-[#64748B]">
+                            These are structural properties of the pipeline, not
+                            options. They are shown here so an auditor can see
+                            what the system guarantees; there is nothing to
+                            switch off.
+                        </p>
 
                         <div className="rounded border border-[#FEE2E2] bg-[#FEF2F2] p-4">
                             <p className="font-mono text-[10px] font-semibold uppercase text-[#B91C1C]">
@@ -568,7 +873,7 @@ export default function SettingsPage() {
                             </p>
                         </div>
 
-                        <SectionActions />
+                        <SectionActions dirty={dirty} onSave={commit} onCancel={revert} />
                     </SettingsSection>
 
                     {/* NOTIFICATIONS */}
@@ -645,10 +950,17 @@ export default function SettingsPage() {
                             </span>
                         </div>
 
-                        <SectionActions />
+                        <SectionActions dirty={dirty} onSave={commit} onCancel={revert} />
                     </SettingsSection>
                 </div>
             </section>
+
+            {zoneFormOpen && (
+                <ZoneComposer
+                    onCancel={() => setZoneFormOpen(false)}
+                    onSubmit={addZone}
+                />
+            )}
         </div>
     );
 }
@@ -713,45 +1025,6 @@ function SettingsSection({
     );
 }
 
-function SubNavItem({
-    href,
-    icon,
-    label,
-    meta,
-    active,
-    dot,
-}: {
-    href: string;
-    icon: React.ReactNode;
-    label: string;
-    meta?: string;
-    active?: boolean;
-    dot?: boolean;
-}) {
-    return (
-        <a
-            href={href}
-            className={`flex items-center justify-between rounded px-3 py-2 text-xs transition ${active
-                    ? "bg-[#F0FDFA] text-[#0F172A]"
-                    : "text-[#64748B] hover:bg-[#F8FAFC] hover:text-[#0F172A]"
-                }`}
-        >
-            <div className="flex items-center gap-2">
-                <span className={active ? "text-[#0D9488]" : ""}>
-                    {icon}
-                </span>
-                {label}
-            </div>
-
-            {dot ? (
-                <span className="h-1.5 w-1.5 rounded-full bg-[#0D9488]" />
-            ) : meta ? (
-                <span className="font-mono text-[10px]">{meta}</span>
-            ) : null}
-        </a>
-    );
-}
-
 function Field({
     label,
     children,
@@ -800,23 +1073,157 @@ function RadioCard({
     );
 }
 
-function SectionActions() {
+function SectionActions({
+    dirty,
+    onSave,
+    onCancel,
+}: {
+    dirty: boolean;
+    onSave: () => void;
+    onCancel: () => void;
+}) {
     return (
-        <div className="flex justify-end gap-2 border-t border-[#E2E8F0] pt-4">
-            <button className={secondaryButton}>Cancel</button>
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-[#E2E8F0] pt-4">
+            {dirty && (
+                <span className="mr-auto font-mono text-[10px] uppercase tracking-wider text-[#B45309]">
+                    Uncommitted changes
+                </span>
+            )}
 
-            <button className={primaryButton}>
+            <button
+                type="button"
+                onClick={onCancel}
+                disabled={!dirty}
+                className={`${secondaryButton} disabled:cursor-not-allowed disabled:opacity-45`}
+            >
+                Cancel
+            </button>
+
+            <button
+                type="button"
+                onClick={onSave}
+                disabled={!dirty}
+                className={`${primaryButton} disabled:cursor-not-allowed disabled:opacity-45`}
+            >
                 Save Changes
             </button>
         </div>
     );
 }
 
-function ActiveBadge() {
+function ZoneComposer({
+    onCancel,
+    onSubmit,
+}: {
+    onCancel: () => void;
+    onSubmit: (zone: Zone) => void;
+}) {
+    const [name, setName] = useState("");
+    const [code, setCode] = useState("");
+    const [type, setType] = useState("Port Turnstile & Barrier");
+    const [staff, setStaff] = useState("0");
+
+    const valid = name.trim().length > 1 && code.trim().length > 1;
+
+    return (
+        <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/60 p-4 sm:items-center"
+            onClick={onCancel}
+        >
+            <div
+                role="dialog"
+                aria-modal="true"
+                aria-label="Add operational zone"
+                onClick={(event) => event.stopPropagation()}
+                className="w-full max-w-md rounded-lg border border-[#E2E8F0] bg-white p-5 shadow-xl"
+            >
+                <h2 className="text-lg font-semibold">Add Operational Zone</h2>
+
+                <form
+                    className="mt-4 flex flex-col gap-3"
+                    onSubmit={(event) => {
+                        event.preventDefault();
+                        if (!valid) return;
+
+                        onSubmit({
+                            name: name.trim(),
+                            code: code.trim().toUpperCase(),
+                            type,
+                            staff: `${staff} Staff`,
+                            enabled: true,
+                        });
+                    }}
+                >
+                    <Field label="Zone Designation">
+                        <input
+                            className={inputStyle}
+                            value={name}
+                            onChange={(event) => setName(event.target.value)}
+                            placeholder="Port Gate 18"
+                        />
+                    </Field>
+
+                    <Field label="Perimeter Code">
+                        <input
+                            className={inputStyle}
+                            value={code}
+                            onChange={(event) => setCode(event.target.value)}
+                            placeholder="BERTH-C // LANES 01-02"
+                        />
+                    </Field>
+
+                    <Field label="Perimeter Type">
+                        <select
+                            className={inputStyle}
+                            value={type}
+                            onChange={(event) => setType(event.target.value)}
+                        >
+                            <option>Port Turnstile &amp; Barrier</option>
+                            <option>High-Density Warehouse</option>
+                            <option>Loading &amp; Staging Area</option>
+                        </select>
+                    </Field>
+
+                    <Field label="Authorized Personnel">
+                        <input
+                            className={inputStyle}
+                            type="number"
+                            min="0"
+                            value={staff}
+                            onChange={(event) => setStaff(event.target.value)}
+                        />
+                    </Field>
+
+                    <div className="mt-2 flex justify-end gap-2">
+                        <button
+                            type="button"
+                            onClick={onCancel}
+                            className={secondaryButton}
+                        >
+                            Cancel
+                        </button>
+
+                        <button
+                            type="submit"
+                            disabled={!valid}
+                            className={`${primaryButton} disabled:cursor-not-allowed disabled:opacity-45`}
+                        >
+                            Add Zone
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+}
+
+function ActiveBadge({ enabled = true }: { enabled?: boolean }) {
     return (
         <span className="inline-flex items-center gap-1.5 rounded border border-[#E2E8F0] bg-[#F8FAFC] px-2 py-1 font-mono text-[9px] font-semibold uppercase">
-            <span className="h-1.5 w-1.5 rounded-full bg-[#0D9488]" />
-            Active
+            <span
+                className={`h-1.5 w-1.5 rounded-full ${enabled ? "bg-[#0D9488]" : "bg-[#94A3B8]"}`}
+            />
+            {enabled ? "Active" : "Disabled"}
         </span>
     );
 }
@@ -873,30 +1280,27 @@ function DecisionBadge({
     );
 }
 
-function ToggleCard({
+/** A property the pipeline always enforces — shown, never toggled. */
+function EnforcedCard({
     title,
     description,
-    checked,
-    onChange,
 }: {
     title: string;
     description: string;
-    checked: boolean;
-    onChange: () => void;
 }) {
     return (
-        <div className="flex items-start justify-between gap-4 rounded border border-[#E2E8F0] bg-[#F8FAFC] p-4">
-            <div>
-                <p className="text-xs font-semibold text-[#0F172A]">
-                    {title}
-                </p>
+        <div className="rounded border border-[#CCFBF1] bg-[#F0FDFA] p-4">
+            <div className="flex items-start justify-between gap-3">
+                <p className="text-sm font-medium text-[#0F172A]">{title}</p>
 
-                <p className="mt-1 text-[11px] leading-relaxed text-[#64748B]">
-                    {description}
-                </p>
+                <span className="shrink-0 rounded-full border border-[#0D9488]/30 bg-white px-2 py-0.5 font-mono text-[10px] text-[#0F766E]">
+                    ENFORCED
+                </span>
             </div>
 
-            <Toggle checked={checked} onChange={onChange} />
+            <p className="mt-1 text-xs leading-relaxed text-[#64748B]">
+                {description}
+            </p>
         </div>
     );
 }

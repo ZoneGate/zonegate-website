@@ -1,9 +1,12 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
 import {
   Activity,
   AlertTriangle,
   CheckCircle2,
   Clock3,
-  Download,
   MapPin,
   Package,
   RefreshCw,
@@ -12,32 +15,30 @@ import {
   XCircle,
 } from "lucide-react";
 
-const requests = [
-  {
-    id: "ZG-AUTH-81921",
-    resource: "CT-928411",
-    zone: "PORT_GATE_17",
-    officer: "K. Vance",
-    status: "APPROVED",
-    time: "14:27:41",
-  },
-  {
-    id: "ZG-AUTH-81919",
-    resource: "CT-554820",
-    zone: "WAREHOUSE_B",
-    officer: "M. Reed",
-    status: "DENIED",
-    time: "14:24:13",
-  },
-  {
-    id: "ZG-AUTH-81915",
-    resource: "CT-884120",
-    zone: "LOADING_ZONE_3",
-    officer: "J. Hayes",
-    status: "HOLD",
-    time: "14:20:08",
-  },
-];
+import Link from "next/link";
+
+import ExportAuditLog from "@/components/ExportAuditLog";
+import HoldMetricCard from "@/components/HoldMetricCard";
+import {
+  ApiError,
+  getHealth,
+  listActors,
+  listDecisionContexts,
+  type DecisionContext,
+  type HealthReport,
+  type RosterEntry,
+} from "@/lib/api";
+import {
+  badgeLabel,
+  clearedResources,
+  countByOutcome,
+  decidedToday,
+  effectiveOutcome,
+  isAwaitingAuthority,
+  securityEvents,
+  shortTime,
+  zoneTotals,
+} from "@/lib/derive";
 
 function StatusBadge({ status }: { status: string }) {
   const style =
@@ -52,19 +53,116 @@ function StatusBadge({ status }: { status: string }) {
       className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 font-mono text-[10px] ${style}`}
     >
       <span
-        className={`h-1.5 w-1.5 rounded-full ${status === "APPROVED"
+        className={`h-1.5 w-1.5 rounded-full ${
+          status === "APPROVED"
             ? "bg-[#0D9488]"
             : status === "HOLD"
               ? "bg-[#D97706]"
               : "bg-[#DC2626]"
-          }`}
+        }`}
       />
       {status}
     </span>
   );
 }
 
+/** Turns `zova_persistence` into `Zova Persistence` for the health list. */
+function humanizeDependency(name: string): string {
+  return name
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 export default function Home() {
+  const [contexts, setContexts] = useState<DecisionContext[]>([]);
+  const [roster, setRoster] = useState<RosterEntry[]>([]);
+  const [health, setHealth] = useState<HealthReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const load = () =>
+      Promise.all([
+        listDecisionContexts({ limit: 100 }),
+        listActors(),
+        getHealth(),
+      ])
+        .then(([loadedContexts, loadedRoster, loadedHealth]) => {
+          if (cancelled) return;
+
+          setContexts(loadedContexts);
+          setRoster(loadedRoster);
+          setHealth(loadedHealth);
+          setError(null);
+        })
+        .catch((caught) => {
+          if (cancelled) return;
+
+          setHealth(null);
+          setError(
+            caught instanceof ApiError
+              ? caught.message
+              : "Unexpected error loading gate telemetry"
+          );
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+
+    load();
+    const id = window.setInterval(load, 15000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
+
+  const view = useMemo(() => {
+    const counts = countByOutcome(contexts);
+    const today = decidedToday(contexts);
+    const todayCounts = countByOutcome(today);
+    const awaiting = contexts.filter((context) =>
+      isAwaitingAuthority(context.decision)
+    );
+
+    return {
+      counts,
+      todayApproved: todayCounts.APPROVE,
+      clearanceRate:
+        today.length > 0
+          ? `${((todayCounts.APPROVE / today.length) * 100).toFixed(1)}% clearance rate`
+          : "no decisions today",
+      zones: zoneTotals(contexts),
+      awaiting,
+      cleared: clearedResources(contexts),
+      boundDevices: roster.filter((entry) => entry.binding?.is_active).length,
+      events: securityEvents(contexts),
+    };
+  }, [contexts, roster]);
+
+  // The table and the CSV export read the same projected rows.
+  const rows = useMemo(
+    () =>
+      contexts.slice(0, 12).map((context) => ({
+        id: context.decision.decision_id,
+        resource: context.transaction?.resource_id ?? "—",
+        zone: context.transaction?.zone ?? "—",
+        officer:
+          context.decision.resolution?.resolved_by ??
+          context.transaction?.actor_id ??
+          "—",
+        status: badgeLabel(effectiveOutcome(context.decision)),
+        time: shortTime(context.decision.decided_at),
+      })),
+    [contexts]
+  );
+
+  const pending = loading && !contexts.length;
+
   return (
     <div className="flex w-full flex-col gap-6">
       <section className="flex flex-col justify-between gap-4 border-b border-[#E2E8F0] pb-4 lg:flex-row lg:items-end">
@@ -82,7 +180,7 @@ export default function Home() {
           </div>
 
           <h1 className="text-2xl font-semibold uppercase tracking-tight text-[#0F172A]">
-            Security Operations & Gate Control
+            Security Operations &amp; Gate Control
           </h1>
 
           <p className="mt-1 text-sm text-[#64748B]">
@@ -95,51 +193,85 @@ export default function Home() {
           <div className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-white px-3 py-2">
             <RefreshCw size={15} className="text-[#0D9488]" />
             <span className="font-mono text-[11px]">
-              TELEMETRY REFRESH: 1.2s
+              TELEMETRY REFRESH: 15s
             </span>
           </div>
 
-          <button className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-white px-3 py-2 hover:bg-[#F1F5F9]">
-            <Download size={15} className="text-[#64748B]" />
-            <span className="text-[10px] font-medium uppercase tracking-wider">
-              Export Audit Log
-            </span>
-          </button>
+          <ExportAuditLog rows={rows} />
         </div>
       </section>
 
+      {error && (
+        <div
+          role="alert"
+          className="rounded-lg border border-[#FECACA] bg-[#FEF2F2] px-4 py-3"
+        >
+          <p className="text-sm font-medium text-[#B91C1C]">
+            Authorization API unavailable
+          </p>
+
+          <p className="mt-1 font-mono text-[11px] text-[#DC2626]">{error}</p>
+        </div>
+      )}
+
       <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard
-          label="Active Requests"
-          value="24"
-          meta="+4 in last 10 min"
+          label="Decisions on Record"
+          value={pending ? "—" : String(contexts.length)}
+          meta={`${view.awaiting.length} awaiting a human`}
           icon={<Activity size={18} />}
         />
 
         <MetricCard
           label="Approved Today"
-          value="142"
-          meta="91.4% clearance rate"
+          value={pending ? "—" : String(view.todayApproved)}
+          meta={view.clearanceRate}
           icon={<CheckCircle2 size={18} />}
         />
 
-        <MetricCard
-          label="On Hold"
-          value="7"
-          meta="Supervisor review"
-          icon={<Clock3 size={18} />}
-        />
+        <Link
+          href="/holds"
+          className="rounded-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D9488]"
+        >
+          <HoldMetricCard />
+        </Link>
 
         <MetricCard
           label="Denied"
-          value="3"
-          meta="Security policy blocked"
+          value={pending ? "—" : String(view.counts.DENY)}
+          meta="Blocked by deterministic policy"
           icon={<XCircle size={18} />}
         />
       </section>
 
-      <section className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white xl:col-span-2">
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <TelemetryTile
+          icon={<MapPin size={16} />}
+          label="Busiest Zone"
+          value={view.zones[0]?.zone ?? "—"}
+        />
+
+        <TelemetryTile
+          icon={<Truck size={16} />}
+          label="Cargo in Handoff"
+          value={pending ? "—" : String(view.awaiting.length).padStart(2, "0")}
+        />
+
+        <TelemetryTile
+          icon={<ShieldCheck size={16} />}
+          label="Bound Devices"
+          value={pending ? "—" : String(view.boundDevices).padStart(2, "0")}
+        />
+
+        <TelemetryTile
+          icon={<Package size={16} />}
+          label="Containers Cleared"
+          value={pending ? "—" : String(view.cleared.length).padStart(2, "0")}
+        />
+      </section>
+
+      <section className="flex flex-col">
+        <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
           <div className="flex items-center justify-between border-b border-[#F1F5F9] px-4 py-3">
             <div>
               <p className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
@@ -162,10 +294,10 @@ export default function Home() {
               <thead className="bg-[#F8FAFC]">
                 <tr className="border-b border-[#E2E8F0]">
                   {[
-                    "Request ID",
+                    "Decision ID",
                     "Resource",
                     "Zone",
-                    "Officer",
+                    "Requested By",
                     "Time",
                     "Decision",
                   ].map((head) => (
@@ -180,7 +312,7 @@ export default function Home() {
               </thead>
 
               <tbody>
-                {requests.map((request) => (
+                {rows.map((request) => (
                   <tr
                     key={request.id}
                     className="border-b border-[#F1F5F9] last:border-b-0 hover:bg-[#F8FAFC]"
@@ -197,9 +329,7 @@ export default function Home() {
                       {request.zone}
                     </td>
 
-                    <td className="px-4 py-3 text-xs">
-                      {request.officer}
-                    </td>
+                    <td className="px-4 py-3 text-xs">{request.officer}</td>
 
                     <td className="px-4 py-3 font-mono text-[11px] text-[#64748B]">
                       {request.time}
@@ -210,42 +340,21 @@ export default function Home() {
                     </td>
                   </tr>
                 ))}
+
+                {!rows.length && (
+                  <tr>
+                    <td
+                      colSpan={6}
+                      className="px-4 py-16 text-center text-sm text-[#64748B]"
+                    >
+                      {loading
+                        ? "Loading gate telemetry…"
+                        : "No authorization requests on record yet."}
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-[#E2E8F0] bg-white">
-          <div className="border-b border-[#F1F5F9] px-4 py-3">
-            <p className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
-              Gate Telemetry
-            </p>
-          </div>
-
-          <div className="space-y-4 p-4">
-            <TelemetryRow
-              icon={<MapPin size={16} />}
-              label="Active Zone"
-              value="PORT_GATE_17"
-            />
-
-            <TelemetryRow
-              icon={<Truck size={16} />}
-              label="Cargo in Handoff"
-              value="08"
-            />
-
-            <TelemetryRow
-              icon={<ShieldCheck size={16} />}
-              label="Verified Devices"
-              value="31"
-            />
-
-            <TelemetryRow
-              icon={<Package size={16} />}
-              label="Containers Cleared"
-              value="146"
-            />
           </div>
         </div>
       </section>
@@ -259,26 +368,44 @@ export default function Home() {
           </div>
 
           <div className="divide-y divide-[#F1F5F9]">
-            <ActivityRow
-              icon={<AlertTriangle size={16} />}
-              title="Location verification failed"
-              meta="ZG-AUTH-81919 · Warehouse B"
-              tone="danger"
-            />
+            {view.events.map((context) => {
+              const decision = context.decision;
+              const outcome = effectiveOutcome(decision);
+              const zone = context.transaction?.zone ?? "unknown zone";
+              const awaiting = isAwaitingAuthority(decision);
 
-            <ActivityRow
-              icon={<Clock3 size={16} />}
-              title="Supervisor approval requested"
-              meta="ZG-AUTH-81915 · Loading Zone 3"
-              tone="warning"
-            />
+              return (
+                <ActivityRow
+                  key={decision.decision_id}
+                  icon={
+                    outcome === "DENY" ? (
+                      <AlertTriangle size={16} />
+                    ) : awaiting ? (
+                      <Clock3 size={16} />
+                    ) : (
+                      <CheckCircle2 size={16} />
+                    )
+                  }
+                  title={decision.reasons[0] ?? badgeLabel(outcome)}
+                  meta={`${decision.decision_id} · ${zone}`}
+                  tone={
+                    outcome === "DENY"
+                      ? "danger"
+                      : awaiting
+                        ? "warning"
+                        : "success"
+                  }
+                />
+              );
+            })}
 
-            <ActivityRow
-              icon={<CheckCircle2 size={16} />}
-              title="Cargo handoff approved"
-              meta="ZG-AUTH-81921 · Port Gate 17"
-              tone="success"
-            />
+            {!view.events.length && (
+              <p className="px-4 py-8 text-center text-xs text-[#94A3B8]">
+                {loading
+                  ? "Loading activity…"
+                  : "Nothing has been held or blocked."}
+              </p>
+            )}
           </div>
         </div>
 
@@ -290,17 +417,33 @@ export default function Home() {
           </div>
 
           <div className="space-y-4 p-4">
-            <HealthRow label="Nokia Evidence Gateway" value="ONLINE" />
-            <HealthRow label="Policy Engine" value="ONLINE" />
-            <HealthRow label="Agent Evaluation" value="SYNCED" />
-            <HealthRow label="Audit Stream" value="LIVE" />
+            <HealthRow
+              label="Authorization API"
+              value={health ? health.status.toUpperCase() : "UNREACHABLE"}
+              ok={Boolean(health)}
+            />
+
+            {Object.entries(health?.dependencies ?? {}).map(([name, state]) => (
+              <HealthRow
+                key={name}
+                label={humanizeDependency(name)}
+                value={state.toUpperCase()}
+                ok={state === "connected" || state === "configured"}
+              />
+            ))}
+
+            {!health && (
+              <p className="font-mono text-[10px] leading-relaxed text-[#94A3B8]">
+                Dependency states are reported by the backend. None are assumed
+                while it is unreachable.
+              </p>
+            )}
           </div>
         </div>
       </section>
     </div>
   );
 }
-
 function MetricCard({
   label,
   value,
@@ -331,7 +474,7 @@ function MetricCard({
   );
 }
 
-function TelemetryRow({
+function TelemetryTile({
   icon,
   label,
   value,
@@ -341,15 +484,17 @@ function TelemetryRow({
   value: string;
 }) {
   return (
-    <div className="flex items-center justify-between">
+    <div className="rounded-lg border border-[#E2E8F0] bg-white p-4">
       <div className="flex items-center gap-2 text-[#64748B]">
         <span className="text-[#0D9488]">{icon}</span>
-        <span className="text-xs">{label}</span>
+        <span className="text-[10px] font-medium uppercase tracking-wider">
+          {label}
+        </span>
       </div>
 
-      <span className="font-mono text-xs font-medium text-[#0F172A]">
+      <p className="mt-3 font-mono text-lg font-semibold text-[#0F172A]">
         {value}
-      </span>
+      </p>
     </div>
   );
 }
@@ -389,16 +534,26 @@ function ActivityRow({
 function HealthRow({
   label,
   value,
+  ok,
 }: {
   label: string;
   value: string;
+  ok: boolean;
 }) {
   return (
     <div className="flex items-center justify-between">
       <span className="text-xs text-[#64748B]">{label}</span>
 
-      <span className="flex items-center gap-1.5 font-mono text-[10px] text-[#0D9488]">
-        <span className="h-1.5 w-1.5 rounded-full bg-[#1FD1A8]" />
+      <span
+        className={`flex items-center gap-1.5 font-mono text-[10px] ${
+          ok ? "text-[#0D9488]" : "text-[#DC2626]"
+        }`}
+      >
+        <span
+          className={`h-1.5 w-1.5 rounded-full ${
+            ok ? "bg-[#1FD1A8]" : "bg-[#DC2626]"
+          }`}
+        />
         {value}
       </span>
     </div>
