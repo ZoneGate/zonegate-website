@@ -26,9 +26,54 @@ The web dashboard provides a centralized interface for monitoring authorization 
 - Recharts
 - Next.js App Router
 
+## Running with Docker
+
+Docker is the only prerequisite -- no Node, no npm.
+
+```bash
+docker compose up -d --build
+```
+
+The console is then on <http://localhost:3000>.
+
+The console is a browser app: it calls the API from the visitor's browser, not
+from the container. `NEXT_PUBLIC_API_URL` therefore has to be an address the
+browser can reach, and Next inlines it **at build time** -- changing it means
+rebuilding, not restarting:
+
+```bash
+NEXT_PUBLIC_API_URL=http://192.168.1.20:8000 docker compose up -d --build
+```
+
+The default, `http://127.0.0.1:8000`, is already correct when the backend is
+running from its own compose file on the same machine.
+
+### Tests
+
+```bash
+docker compose --profile tools run --rm test
+```
+
+43 unit tests over the API client and the projections behind every figure the
+dashboard shows. A bug in those is a wrong number on a security operator's
+screen rather than a visible crash, which is why they are tested apart from the
+pages that render them.
+
+## The rest of the system
+
+| Repository | What it is |
+|---|---|
+| [zonegate-backend](https://github.com/ZoneGate/zonegate-backend) | The authorization API, policy engine and evidence gateway |
+| **zonegate-website** | This console |
+| [zonegate-mobile](https://github.com/ZoneGate/zonegate-mobile) | The field app, where an authorization is requested |
+
+The console reads and writes live API data -- decisions, the actor roster and
+the policy thresholds. With no backend reachable it says so in the header
+rather than rendering an empty dashboard.
+
 ## Requirements
 
-Before running the project, make sure the following tools are installed:
+To run without Docker, make sure the following tools are installed:
 
 - Node.js 20 or later
 - npm
