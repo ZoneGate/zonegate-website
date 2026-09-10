@@ -3,6 +3,7 @@
 import {
     Bell,
     CheckSquare,
+    ChevronLeft,
     Download,
     Gavel,
     Lock,
@@ -14,6 +15,8 @@ import {
     ShieldCheck,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+
+import { useHash } from "@/components/useQueryParam";
 
 import { useStoredValue } from "@/components/useStoredValue";
 import {
@@ -293,7 +296,20 @@ function PolicyThresholds() {
     );
 }
 
+/** The sections the sidebar links to, in the order they appear on the page. */
+const SECTION_IDS = ["general", "zones", "policies", "security", "notifications"];
+
 function SettingsEditor({ initial }: { initial: Config }) {
+    // `/settings` shows the whole console; `/settings#notifications` narrows it
+    // to that one section. An unknown hash falls back to showing everything.
+    const hash = useHash();
+    const focused = SECTION_IDS.includes(hash) ? hash : null;
+
+    // Dropping the hash without a reload; the store listens for hashchange.
+    const showAllSections = () => {
+        window.history.replaceState(null, "", window.location.pathname);
+    };
+
     const [saved, setSaved] = useState<Config>(initial);
     const [draft, setDraft] = useState<Config>(initial);
     // Only zones a decision has actually targeted are real; the console does
@@ -492,9 +508,21 @@ function SettingsEditor({ initial }: { initial: Config }) {
 
             <section className="flex flex-col">
 
+                {focused && (
+                    <button
+                        type="button"
+                        onClick={showAllSections}
+                        className="mb-4 flex items-center gap-2 self-start rounded border border-[#E2E8F0] bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-[#0F172A] transition hover:border-[#0F172A] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D9488]"
+                    >
+                        <ChevronLeft size={14} className="text-[#64748B]" />
+                        All Settings
+                    </button>
+                )}
+
                 <div className="flex flex-col gap-8">
                     {/* GENERAL */}
                     <SettingsSection
+                        active={focused}
                         id="general"
                         icon={<Settings2 size={18} />}
                         title="General"
@@ -583,6 +611,7 @@ function SettingsEditor({ initial }: { initial: Config }) {
 
                     {/* LOCATIONS */}
                     <SettingsSection
+                        active={focused}
                         id="zones"
                         icon={<MapPin size={18} />}
                         title="Locations & Zones"
@@ -694,6 +723,7 @@ function SettingsEditor({ initial }: { initial: Config }) {
 
                     {/* POLICIES */}
                     <SettingsSection
+                        active={focused}
                         id="policies"
                         icon={<Gavel size={18} />}
                         title="Authorization Policies"
@@ -826,6 +856,7 @@ function SettingsEditor({ initial }: { initial: Config }) {
 
                     {/* SECURITY */}
                     <SettingsSection
+                        active={focused}
                         id="security"
                         icon={<Lock size={18} />}
                         title="Security"
@@ -878,6 +909,7 @@ function SettingsEditor({ initial }: { initial: Config }) {
 
                     {/* NOTIFICATIONS */}
                     <SettingsSection
+                        active={focused}
                         id="notifications"
                         icon={<Bell size={18} />}
                         title="Notifications"
@@ -976,6 +1008,7 @@ const secondaryButton =
 
 function SettingsSection({
     id,
+    active,
     icon,
     title,
     description,
@@ -984,6 +1017,8 @@ function SettingsSection({
     children,
 }: {
     id: string;
+    /** Section selected by the URL hash, or null when the page shows them all. */
+    active?: string | null;
     icon: React.ReactNode;
     title: string;
     description: string;
@@ -991,9 +1026,12 @@ function SettingsSection({
     action?: React.ReactNode;
     children: React.ReactNode;
 }) {
+    // Hidden rather than unmounted, so an unsaved draft survives a detour
+    // through another section.
     return (
         <section
             id={id}
+            hidden={active != null && active !== id}
             className="scroll-mt-24 rounded-lg border border-[#E2E8F0] bg-white p-6 shadow-sm"
         >
             <div className="mb-5 flex flex-col justify-between gap-3 border-b border-[#E2E8F0] pb-4 sm:flex-row sm:items-start">
