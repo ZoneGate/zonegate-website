@@ -100,3 +100,45 @@ export function badgeLabel(outcome: DecisionOutcome): string {
     if (outcome === "DENY") return "DENIED";
     return "HOLD";
 }
+
+/**
+ * How long the holds in this set waited on a human, averaged.
+ *
+ * Measured from the moment the engine handed the decision over to the moment
+ * the named authority answered, so it only counts holds that were actually
+ * resolved. Returns `null` when nobody has resolved anything yet -- a dash on
+ * screen is honest, an invented average is not.
+ */
+export function resolutionLatency(
+    contexts: DecisionContext[]
+): { averageMinutes: number; sampled: number } | null {
+    const waits: number[] = [];
+
+    for (const { decision } of contexts) {
+        const resolution = decision.resolution;
+        if (!resolution) continue;
+
+        const handedOver = new Date(decision.decided_at).getTime();
+        const answered = new Date(resolution.resolved_at).getTime();
+        if (!Number.isFinite(handedOver) || !Number.isFinite(answered)) continue;
+        if (answered < handedOver) continue;
+
+        waits.push((answered - handedOver) / 60000);
+    }
+
+    if (waits.length === 0) return null;
+
+    return {
+        averageMinutes: waits.reduce((sum, wait) => sum + wait, 0) / waits.length,
+        sampled: waits.length,
+    };
+}
+
+/** Renders a minute count the way an operations screen reads it. */
+export function formatWait(minutes: number): string {
+    if (minutes < 1) return "under a minute";
+    if (minutes < 90) return `${Math.round(minutes)} min avg`;
+    const hours = minutes / 60;
+    if (hours < 48) return `${hours.toFixed(1)} h avg`;
+    return `${(hours / 24).toFixed(1)} d avg`;
+}

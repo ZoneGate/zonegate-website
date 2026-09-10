@@ -19,6 +19,8 @@ import {
 import {
     countByOutcome,
     effectiveOutcome,
+    formatWait,
+    resolutionLatency,
     shortTime,
 } from "@/lib/derive";
 import {
@@ -293,6 +295,8 @@ export default function StatisticsPage() {
     );
 
     const incidentSource = useMemo(() => toIncidents(contexts), [contexts]);
+
+    const latency = useMemo(() => resolutionLatency(contexts), [contexts]);
 
     const data = useMemo(() => {
         const take = period.take;
@@ -641,29 +645,35 @@ export default function StatisticsPage() {
                                 <span className="text-[10px] font-semibold uppercase text-[#0F172A]">
                                     Operational Telemetry Diagnostics
                                 </span>
-
-                                <span className="font-mono text-[10px] font-medium text-[#0D9488]">
-                                    CONFIDENCE: 99.8%
-                                </span>
                             </div>
 
                             <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-3">
                                 <Diagnostic
                                     label="Resolution Latency"
-                                    value="4.2 min avg"
-                                    meta="-0.8m vs 14d rolling"
+                                    value={
+                                        latency
+                                            ? formatWait(latency.averageMinutes)
+                                            : "—"
+                                    }
+                                    meta={
+                                        latency
+                                            ? `across ${latency.sampled} resolved ${
+                                                  latency.sampled === 1 ? "hold" : "holds"
+                                              }`
+                                            : "no hold resolved yet"
+                                    }
                                 />
 
                                 <Diagnostic
                                     label="Auto-Clearance Rate"
                                     value={pct(data.approved, data.total)}
-                                    meta="RFID + Iris match engine"
+                                    meta="decided without a human"
                                 />
 
                                 <Diagnostic
                                     label="Manual Escalation"
                                     value={pct(data.hold + data.denied, data.total)}
-                                    meta="Officer Vance secondary"
+                                    meta="held for authority or blocked"
                                 />
                             </div>
                         </div>

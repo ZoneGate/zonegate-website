@@ -19,7 +19,9 @@ import {
     countByOutcome,
     decidedToday,
     effectiveOutcome,
+    formatWait,
     isAwaitingAuthority,
+    resolutionLatency,
     securityEvents,
     shortStamp,
     shortTime,
@@ -296,5 +298,64 @@ describe("time formatting", () => {
         expect(shortStamp("2026-09-10T12:05:00+03:00")).toBe(
             "2026-09-10 09:05 UTC"
         );
+    });
+});
+
+describe("resolutionLatency", () => {
+    /** A hold decided at `decidedAt` and answered `minutes` later. */
+    function waited(id: string, minutes: number) {
+        const row = context(id, "HOLD", {
+            decidedAt: "2026-09-10T09:00:00Z",
+            resolved: "APPROVE",
+        });
+
+        row.decision.resolution!.resolved_at = new Date(
+            Date.parse("2026-09-10T09:00:00Z") + minutes * 60000
+        ).toISOString();
+
+        return row;
+    }
+
+    it("averages the wait across resolved holds only", () => {
+        const latency = resolutionLatency([
+            waited("a", 10),
+            waited("b", 20),
+            context("c", "HOLD"),
+            context("d", "APPROVE"),
+        ]);
+
+        expect(latency).toEqual({ averageMinutes: 15, sampled: 2 });
+    });
+
+    it("is null when nobody has resolved anything", () => {
+        expect(resolutionLatency([context("a", "HOLD")])).toBeNull();
+    });
+
+    it("is null for an empty log, rather than reporting zero", () => {
+        expect(resolutionLatency([])).toBeNull();
+    });
+
+    it("ignores a resolution stamped before the decision it resolves", () => {
+        const backwards = waited("a", -30);
+
+        expect(resolutionLatency([backwards])).toBeNull();
+    });
+});
+
+describe("formatWait", () => {
+    it("keeps short waits in minutes", () => {
+        expect(formatWait(42)).toBe("42 min avg");
+    });
+
+    it("does not round a real wait down to zero", () => {
+        expect(formatWait(0.4)).toBe("under a minute");
+    });
+
+    it("switches to hours past an hour and a half", () => {
+        expect(formatWait(150)).toBe("2.5 h avg");
+    });
+
+    it("switches to days past two", () => {
+        expect(formatWait(60 * 72)).toBe("3.0 d avg");
     });
 });
