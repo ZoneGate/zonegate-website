@@ -3,7 +3,6 @@
 import {
     BadgeCheck,
     CalendarDays,
-    CheckCircle2,
     ChevronLeft,
     ChevronRight,
     ClipboardCheck,
@@ -18,6 +17,7 @@ import {
     Truck,
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { flushSync } from "react-dom";
 
 type RequestStatus =
     | "PENDING"
@@ -106,14 +106,19 @@ const tabs = [
 export default function RequestsPage() {
     const [activeTab, setActiveTab] = useState("All Requests");
     const [search, setSearch] = useState("");
-    const [selectedId, setSelectedId] = useState("REQ-98042-TK");
+    const [selectedId, setSelectedId] = useState<string | null>(null);
+    const [requestRows, setRequestRows] = useState(requests);
+    const [actionMessage, setActionMessage] = useState("");
+    const [zone, setZone] = useState("ALL");
+    const [sortOrder, setSortOrder] = useState("DESC");
 
     const filteredRequests = useMemo(() => {
-        return requests.filter((request) => {
+        return requestRows.filter((request) => {
             const text =
                 `${request.id} ${request.driver} ${request.license} ${request.carrier} ${request.dock}`.toLowerCase();
 
-            const matchesSearch = text.includes(search.toLowerCase());
+            const matchesSearch = text.includes(search.trim().toLowerCase());
+            const matchesZone = zone === "ALL" || request.dock.startsWith(`${zone} - `);
 
             const matchesTab =
                 activeTab === "All Requests" ||
@@ -126,12 +131,32 @@ export default function RequestsPage() {
                 (activeTab === "Denied" &&
                     request.status === "DENIED");
 
-            return matchesSearch && matchesTab;
-        });
-    }, [activeTab, search]);
+            return matchesSearch && matchesTab && matchesZone;
+        }).sort((a, b) => sortOrder === "ASC"
+            ? a.time.localeCompare(b.time)
+            : b.time.localeCompare(a.time));
+    }, [activeTab, search, zone, sortOrder, requestRows]);
 
     const selectedRequest =
-        requests.find((request) => request.id === selectedId) ?? requests[0];
+        requestRows.find((request) => request.id === selectedId);
+
+    function updateDecision(status: RequestStatus) {
+        if (!selectedRequest) return;
+        setRequestRows((current) => current.map((request) => request.id === selectedRequest.id ? { ...request, status } : request));
+        setActionMessage(`${selectedRequest.id} marked ${status === "SECONDARY" ? "for secondary inspection" : "approved for berth admission"}.`);
+    }
+
+    function openDossier(id: string) {
+        flushSync(() => setSelectedId(id));
+        document.getElementById("inspection-dossier")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    function resetFilters() {
+        setActiveTab("All Requests");
+        setSearch("");
+        setZone("ALL");
+        setSortOrder("DESC");
+    }
 
     return (
         <div className="flex w-full flex-col">
@@ -162,10 +187,6 @@ export default function RequestsPage() {
                         </span>
                     </div>
 
-                    <button className="flex items-center gap-2 rounded bg-[#0D9488] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#0F766E]">
-                        <ClipboardCheck size={17} />
-                        Submit New Manifest Clearance
-                    </button>
                 </div>
             </section>
 
@@ -213,6 +234,7 @@ export default function RequestsPage() {
                             <button
                                 key={tab}
                                 onClick={() => setActiveTab(tab)}
+                                aria-pressed={active}
                                 className={`rounded px-4 py-2 font-mono text-[11px] uppercase tracking-wide transition ${active
                                         ? "bg-[#0D9488] text-white"
                                         : "bg-[#F8FAFC] text-[#64748B] hover:bg-[#F1F5F9] hover:text-[#0F172A]"
@@ -232,31 +254,50 @@ export default function RequestsPage() {
                         />
 
                         <input
+                            aria-label="Search requests"
                             value={search}
                             onChange={(event) => setSearch(event.target.value)}
-                            placeholder="SEARCH MANIFEST ID, DRIVER NAME, PLATE NUMBER..."
+                            placeholder="SEARCH REQUEST ID, DRIVER, LICENSE, CARRIER..."
                             className="w-full rounded border border-[#E2E8F0] bg-[#F8FAFC] py-2 pl-10 pr-3 font-mono text-[11px] text-[#0F172A] outline-none placeholder:text-[#64748B] focus:border-[#0D9488]"
                         />
                     </div>
 
-                    <div className="flex w-full items-center justify-end gap-2 md:w-auto">
-                        <button className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-2 font-mono text-[11px] text-[#64748B]">
+                    <div className="flex w-full flex-wrap items-center justify-end gap-2 md:w-auto">
+                        <label className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-2 font-mono text-[11px] text-[#64748B]">
                             <Filter size={16} />
-                            ZONE FILTER: ALL BERTHS
-                        </button>
+                            <span className="sr-only">Zone filter</span>
+                            <select value={zone} onChange={(event) => setZone(event.target.value)} className="min-w-0 cursor-pointer bg-transparent py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-[#0D9488]">
+                                <option value="ALL">ZONE FILTER: ALL BERTHS</option>
+                                {["Zone A", "Zone B", "Zone C", "Zone D"].map((item) => (
+                                    <option key={item} value={item}>{item.toUpperCase()}</option>
+                                ))}
+                            </select>
+                        </label>
 
-                        <button className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-2 font-mono text-[11px] text-[#64748B]">
+                        <label className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-2 font-mono text-[11px] text-[#64748B]">
                             <SlidersHorizontal size={16} />
-                            SORT: SUBMISSION DESC
-                        </button>
+                            <span className="sr-only">Sort requests</span>
+                            <select value={sortOrder} onChange={(event) => setSortOrder(event.target.value)} className="min-w-0 cursor-pointer bg-transparent py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-[#0D9488]">
+                                <option value="DESC">SORT: NEWEST FIRST</option>
+                                <option value="ASC">SORT: OLDEST FIRST</option>
+                            </select>
+                        </label>
+                        {(search || zone !== "ALL" || activeTab !== "All Requests" || sortOrder !== "DESC") && (
+                            <button onClick={resetFilters} className="rounded px-3 py-2 font-mono text-[11px] text-[#0F766E] hover:bg-[#F0FDFA]">RESET FILTERS</button>
+                        )}
                     </div>
                 </div>
             </section>
 
-            <section className="grid grid-cols-1 items-start gap-6 xl:grid-cols-12">
-                <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] xl:col-span-8">
-                    <div className="overflow-x-auto">
-                        <table className="w-full min-w-[1100px] border-collapse text-left">
+            <section className="grid min-w-0 grid-cols-1 items-start gap-6">
+                <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+                    <div className="min-w-0">
+                        <table className="w-full table-fixed border-collapse text-left [overflow-wrap:anywhere] [&_td]:px-2 [&_th]:px-2 2xl:[&_td]:px-4 2xl:[&_th]:px-4">
+                            <colgroup>
+                                {[15, 17, 16, 14, 10, 8, 11, 9].map((width, index) => (
+                                    <col key={index} style={{ width: `${width}%` }} />
+                                ))}
+                            </colgroup>
                             <thead>
                                 <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
                                     {[
@@ -280,19 +321,27 @@ export default function RequestsPage() {
                             </thead>
 
                             <tbody className="divide-y divide-[#E2E8F0]">
+                                {filteredRequests.length === 0 && (
+                                    <tr>
+                                        <td colSpan={8} className="px-4 py-10 text-center text-sm text-[#64748B]">
+                                            No requests match your filters.
+                                            <button onClick={resetFilters} className="ml-2 font-medium text-[#0F766E] underline">Reset filters</button>
+                                        </td>
+                                    </tr>
+                                )}
                                 {filteredRequests.map((request) => {
-                                    const selected = request.id === selectedId;
+                                    const selected = request.id === selectedRequest?.id;
 
                                     return (
                                         <tr
                                             key={request.id}
-                                            onClick={() => setSelectedId(request.id)}
+                                            onClick={() => openDossier(request.id)}
                                             className={`cursor-pointer transition ${selected
                                                     ? "border-l-4 border-l-[#0D9488] bg-[#F0FDFA]"
                                                     : "hover:bg-[#F8FAFC]"
                                                 }`}
                                         >
-                                            <td className="whitespace-nowrap px-4 py-4 font-mono text-xs font-medium">
+                                            <td className="px-4 py-4 font-mono text-xs font-medium">
                                                 {selected && (
                                                     <span className="mr-1 rounded bg-[#0D9488] px-1.5 py-0.5 text-[10px] font-semibold text-white">
                                                         ACTIVE
@@ -301,9 +350,9 @@ export default function RequestsPage() {
                                                 {request.id}
                                             </td>
 
-                                            <td className="whitespace-nowrap px-4 py-4">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[#CCFBF1] font-mono text-[11px] font-semibold text-[#0D9488]">
+                                            <td className="px-4 py-4">
+                                                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#CCFBF1] font-mono text-[11px] font-semibold text-[#0D9488]">
                                                         {request.initials}
                                                     </div>
 
@@ -318,36 +367,45 @@ export default function RequestsPage() {
                                                 </div>
                                             </td>
 
-                                            <td className="whitespace-nowrap px-4 py-4 text-sm text-[#64748B]">
+                                            <td className="px-4 py-4 text-sm text-[#64748B]">
                                                 {request.carrier}
                                             </td>
 
-                                            <td className="whitespace-nowrap px-4 py-4">
+                                            <td className="px-4 py-4">
                                                 <span className="rounded bg-[#F1F5F9] px-2 py-1 font-mono text-[10px] text-[#0F172A]">
                                                     {request.dock}
                                                 </span>
                                             </td>
 
-                                            <td className="whitespace-nowrap px-4 py-4 font-mono text-[10px] text-[#64748B]">
+                                            <td className="px-4 py-4 font-mono text-[10px] text-[#64748B]">
                                                 {request.tier}
                                             </td>
 
-                                            <td className="whitespace-nowrap px-4 py-4 text-right font-mono text-xs">
+                                            <td className="px-4 py-4 text-right font-mono text-xs">
                                                 {request.time}
                                             </td>
 
-                                            <td className="whitespace-nowrap px-4 py-4">
+                                            <td className="px-4 py-4">
                                                 <StatusBadge status={request.status} />
                                             </td>
 
-                                            <td className="whitespace-nowrap px-4 py-4 text-right">
-                                                <div className="flex justify-end gap-1">
-                                                    <button className="rounded border border-[#E2E8F0] bg-white px-2 py-1 font-mono text-[10px] uppercase hover:bg-[#F8FAFC]">
+                                            <td className="px-4 py-4 text-right">
+                                                <div className="flex flex-wrap justify-end gap-1">
+                                                    <button
+                                                        id={`dossier-${request.id}`}
+                                                        aria-expanded={selected}
+                                                        aria-controls={selected ? "inspection-dossier" : undefined}
+                                                        onClick={(event) => {
+                                                            event.stopPropagation();
+                                                            openDossier(request.id);
+                                                        }}
+                                                        className="rounded border border-[#E2E8F0] bg-white px-2 py-1 font-mono text-[10px] uppercase hover:bg-[#F8FAFC]"
+                                                    >
                                                         Dossier
                                                     </button>
 
                                                     {request.status !== "DENIED" && (
-                                                        <button className="rounded bg-[#0D9488] px-2 py-1 font-mono text-[10px] uppercase text-white hover:bg-[#0F766E]">
+                                                        <button type="button" onClick={(event) => { event.stopPropagation(); setSelectedId(request.id); setRequestRows((current) => current.map((item) => item.id === request.id ? { ...item, status: "APPROVED" } : item)); setActionMessage(`${request.id} approved for berth admission.`); }} className="rounded bg-[#0D9488] px-2 py-1 font-mono text-[10px] uppercase text-white hover:bg-[#0F766E]">
                                                             Admit
                                                         </button>
                                                     )}
@@ -361,28 +419,28 @@ export default function RequestsPage() {
                     </div>
 
                     <div className="flex items-center justify-between border-t border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3 text-[#64748B]">
-                        <span className="font-mono text-[10px]">
-                            SHOWING 1-5 OF 42 QUEUED MANIFESTS
+                        <span aria-live="polite" className="font-mono text-[10px]">
+                            SHOWING {filteredRequests.length} OF {requestRows.length} REQUESTS
                         </span>
 
                         <div className="flex items-center gap-2">
-                            <button className="flex h-7 w-7 items-center justify-center rounded border border-[#E2E8F0] bg-white">
+                            <button disabled aria-label="Pagination unavailable: all results shown" className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-[#E2E8F0] bg-white disabled:cursor-not-allowed disabled:opacity-40">
                                 <ChevronLeft size={16} />
                             </button>
 
                             <span className="font-mono text-[10px] font-medium text-[#0F172A]">
-                                1 / 9
+                                {filteredRequests.length ? "1 / 1" : "0 / 0"}
                             </span>
 
-                            <button className="flex h-7 w-7 items-center justify-center rounded border border-[#E2E8F0] bg-white">
+                            <button disabled aria-label="Pagination unavailable: all results shown" className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-[#E2E8F0] bg-white disabled:cursor-not-allowed disabled:opacity-40">
                                 <ChevronRight size={16} />
                             </button>
                         </div>
                     </div>
                 </div>
 
-                <aside className="flex flex-col gap-5 rounded-lg border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] xl:col-span-4">
-                    <div className="flex items-start justify-between border-b border-[#E2E8F0] pb-4">
+                {selectedRequest && <aside id="inspection-dossier" className="grid min-w-0 scroll-mt-20 grid-cols-1 gap-5 rounded-lg border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] xl:grid-cols-2">
+                    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[#E2E8F0] pb-4 xl:col-span-2">
                         <div>
                             <p className="font-mono text-[10px] uppercase tracking-[0.08em] text-[#64748B]">
                                 Inspection Dossier
@@ -401,6 +459,16 @@ export default function RequestsPage() {
                             <span className="h-1.5 w-1.5 rounded-full bg-[#1FD1A8]" />
                             VERIFIED READY
                         </span>
+                        <button
+                            onClick={() => {
+                                setSelectedId(null);
+                                document.getElementById(`dossier-${selectedRequest.id}`)?.focus({ preventScroll: true });
+                            }}
+                            className="rounded border border-[#E2E8F0] px-3 py-1.5 text-xs font-medium text-[#64748B] hover:bg-[#F1F5F9]"
+                            aria-label="Close inspection dossier"
+                        >
+                            Close
+                        </button>
                     </div>
 
                     <div className="rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] p-4">
@@ -417,7 +485,7 @@ export default function RequestsPage() {
                             </span>
                         </div>
 
-                        <div className="mt-3 flex items-center gap-3">
+                        <div className="mt-3 flex min-w-0 flex-wrap items-center gap-2">
                             <div className="flex h-16 w-16 items-center justify-center rounded bg-[#E2E8F0]">
                                 <Truck size={26} className="text-[#64748B]" />
                             </div>
@@ -474,20 +542,6 @@ export default function RequestsPage() {
                         </div>
                     </div>
 
-                    <div className="relative flex h-36 items-end overflow-hidden rounded-lg border border-[#E2E8F0] bg-[#0F172A] p-3">
-                        <div className="absolute inset-0 bg-[linear-gradient(to_top,rgba(15,23,42,0.95),rgba(15,23,42,0.25))]" />
-
-                        <div className="relative z-10 flex w-full items-center justify-between">
-                            <span className="font-mono text-[10px] text-white">
-                                LPR CAM-04: PLATE MATCH WA-9921-TK
-                            </span>
-
-                            <span className="rounded bg-[#0D9488] px-2 py-0.5 font-mono text-[10px] font-semibold text-white">
-                                SYNCED
-                            </span>
-                        </div>
-                    </div>
-
                     <div className="rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] p-4">
                         <div className="flex justify-between">
                             <span className="font-mono text-[10px] uppercase text-[#64748B]">
@@ -510,17 +564,18 @@ export default function RequestsPage() {
                         </p>
                     </div>
 
-                    <div className="flex gap-2">
-                        <button className="flex-1 rounded border border-[#E2E8F0] bg-white px-4 py-2 text-sm font-medium hover:bg-[#F8FAFC]">
+                    <div className="flex flex-wrap justify-end gap-2 xl:col-span-2">
+                        <button type="button" onClick={() => updateDecision("SECONDARY")} className="rounded border border-[#E2E8F0] bg-white px-4 py-2 text-sm font-medium hover:bg-[#F8FAFC]">
                             Flag Secondary
                         </button>
 
-                        <button className="flex flex-1 items-center justify-center gap-2 rounded bg-[#0D9488] px-4 py-2 text-sm font-medium text-white hover:bg-[#0F766E]">
+                        <button type="button" onClick={() => updateDecision("APPROVED")} className="flex items-center justify-center gap-2 rounded bg-[#0D9488] px-4 py-2 text-sm font-medium text-white hover:bg-[#0F766E]">
                             <LockOpen size={16} />
                             Admit to Berth
                         </button>
+                        {actionMessage && <p role="status" className="text-xs text-[#0F766E] xl:col-span-2">{actionMessage}</p>}
                     </div>
-                </aside>
+                </aside>}
             </section>
         </div>
     );

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import {
   Grid2X2,
@@ -14,7 +15,7 @@ import {
 const menuItems = [
   { label: "Dashboard", href: "/", icon: Grid2X2 },
   { label: "Requests", href: "/requests", icon: ClipboardList },
-  { label: "Couriers / Employees", href: "/employees", icon: BadgeCheck },
+  { label: "Employees", href: "/employees", icon: BadgeCheck },
   { label: "Statistics", href: "/statistics", icon: BarChart3 },
   { label: "Settings", href: "/settings", icon: SlidersHorizontal },
 ];
@@ -24,15 +25,42 @@ export default function Sidebar() {
 
   return (
     <aside className="fixed left-0 top-0 z-50 flex h-screen w-64 flex-col justify-between border-r border-[#1E293B] bg-[#0F172A] text-white">
-      <div>
-        <div className="flex h-16 items-center gap-2 border-b border-[#1E293B] px-4">
-          <div className="flex h-8 w-8 items-center justify-center rounded bg-[#0D9488] font-bold">
-            Z
-          </div>
-          <span className="text-sm font-semibold uppercase tracking-wider">
-            ZoneGate
-          </span>
-        </div>
+      <svg width="0" height="0" className="absolute" aria-hidden="true" focusable="false">
+        <defs>
+          <filter
+            id="zonegate-remove-white"
+            x="0%"
+            y="0%"
+            width="100%"
+            height="100%"
+            colorInterpolationFilters="sRGB"
+          >
+            {/* Use the logo's ink color with a soft mask to avoid white JPEG fringes. */}
+            <feColorMatrix
+              type="matrix"
+              values="0 0 0 0 0.0784  0 0 0 0 0.3294  0 0 0 0 0.3922  -0.2976 -1.0013 -0.1011 0 1.36"
+            />
+            <feComposite in2="SourceGraphic" operator="in" />
+          </filter>
+        </defs>
+      </svg>
+      <div className="min-h-0 overflow-y-auto">
+        <Link
+          href="/"
+          aria-label="ZoneGate home"
+          className="isolate flex h-28 items-center justify-center border-b border-[#1E293B] bg-[#0F172A] px-4 py-3 transition-colors hover:bg-[#152035] focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-[#1FD1A8]"
+        >
+          <Image
+            src="/zonegate-logo.jpeg"
+            alt="ZoneGate"
+            width={960}
+            height={1096}
+            sizes="77px"
+            preload
+            className="h-[88px] w-auto object-contain"
+            style={{ filter: "url(#zonegate-remove-white)" }}
+          />
+        </Link>
 
         <nav className="flex flex-col gap-1 p-3">
           {menuItems.map((item) => {
@@ -63,7 +91,7 @@ export default function Sidebar() {
         </nav>
       </div>
 
-      <div className="border-t border-[#1E293B] bg-[#090D16] p-4">
+      <div className="shrink-0 border-t border-[#1E293B] bg-[#090D16] p-4">
         <div className="mb-4">
           <p className="text-[10px] uppercase tracking-widest text-[#94A3B8]">
             Node Facility

@@ -1,9 +1,10 @@
+"use client";
+
 import {
   Activity,
   AlertTriangle,
   CheckCircle2,
   Clock3,
-  Download,
   MapPin,
   Package,
   RefreshCw,
@@ -11,6 +12,7 @@ import {
   Truck,
   XCircle,
 } from "lucide-react";
+import { useState } from "react";
 
 const requests = [
   {
@@ -65,6 +67,13 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export default function Home() {
+  const [lastRefresh, setLastRefresh] = useState("1.2s");
+
+  function refreshTelemetry() {
+    setLastRefresh("NOW");
+    window.setTimeout(() => setLastRefresh("1.2s"), 1200);
+  }
+
   return (
     <div className="flex w-full flex-col gap-6">
       <section className="flex flex-col justify-between gap-4 border-b border-[#E2E8F0] pb-4 lg:flex-row lg:items-end">
@@ -92,17 +101,10 @@ export default function Home() {
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-white px-3 py-2">
+          <button type="button" onClick={refreshTelemetry} aria-label="Refresh gate telemetry" className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-white px-3 py-2 transition hover:bg-[#F1F5F9] focus-visible:outline-2 focus-visible:outline-[#0D9488]">
             <RefreshCw size={15} className="text-[#0D9488]" />
             <span className="font-mono text-[11px]">
-              TELEMETRY REFRESH: 1.2s
-            </span>
-          </div>
-
-          <button className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-white px-3 py-2 hover:bg-[#F1F5F9]">
-            <Download size={15} className="text-[#64748B]" />
-            <span className="text-[10px] font-medium uppercase tracking-wider">
-              Export Audit Log
+              TELEMETRY REFRESH: {lastRefresh}
             </span>
           </button>
         </div>
@@ -138,8 +140,8 @@ export default function Home() {
         />
       </section>
 
-      <section className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white xl:col-span-2">
+      <section className="flex flex-col gap-4">
+        <div className="order-2 w-full overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
           <div className="flex items-center justify-between border-b border-[#F1F5F9] px-4 py-3">
             <div>
               <p className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
@@ -215,7 +217,7 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="rounded-lg border border-[#E2E8F0] bg-white">
+        <div className="order-1 w-full rounded-lg border border-[#E2E8F0] bg-white">
           <div className="border-b border-[#F1F5F9] px-4 py-3">
             <p className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
               Gate Telemetry
@@ -250,7 +252,7 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+      <section className="grid grid-cols-1 gap-4">
         <div className="rounded-lg border border-[#E2E8F0] bg-white xl:col-span-2">
           <div className="border-b border-[#F1F5F9] px-4 py-3">
             <p className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
@@ -282,20 +284,6 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="rounded-lg border border-[#E2E8F0] bg-white">
-          <div className="border-b border-[#F1F5F9] px-4 py-3">
-            <p className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
-              System Health
-            </p>
-          </div>
-
-          <div className="space-y-4 p-4">
-            <HealthRow label="Nokia Evidence Gateway" value="ONLINE" />
-            <HealthRow label="Policy Engine" value="ONLINE" />
-            <HealthRow label="Agent Evaluation" value="SYNCED" />
-            <HealthRow label="Audit Stream" value="LIVE" />
-          </div>
-        </div>
       </section>
     </div>
   );
@@ -382,25 +370,6 @@ function ActivityRow({
           {meta}
         </p>
       </div>
-    </div>
-  );
-}
-
-function HealthRow({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-xs text-[#64748B]">{label}</span>
-
-      <span className="flex items-center gap-1.5 font-mono text-[10px] text-[#0D9488]">
-        <span className="h-1.5 w-1.5 rounded-full bg-[#1FD1A8]" />
-        {value}
-      </span>
     </div>
   );
 }

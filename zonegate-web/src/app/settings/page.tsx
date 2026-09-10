@@ -3,18 +3,15 @@
 import {
     Bell,
     CheckSquare,
-    Download,
     Gavel,
     Lock,
     MapPin,
     MoreHorizontal,
     Plus,
-    RefreshCw,
-    Server,
     Settings2,
     ShieldCheck,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 
 const zones = [
     {
@@ -72,21 +69,102 @@ const policies = [
 ];
 
 export default function SettingsPage() {
-    const [defaultView, setDefaultView] = useState("all");
+    const [activeSection, setActiveSection] = useState<string | null>(null);
+    const [showRuleForm, setShowRuleForm] = useState(false);
+    const [ruleMessage, setRuleMessage] = useState("");
+    const storedPolicies = useSyncExternalStore(subscribeSettings, () => {
+        try { return localStorage.getItem("zonegate.policies.v1"); } catch { return null; }
+    }, () => null);
+    let policyList = policies;
+    try {
+        const parsed = storedPolicies ? JSON.parse(storedPolicies) : null;
+        if (Array.isArray(parsed) && parsed.every(item => item && typeof item.id === "string" && typeof item.rule === "string" && typeof item.decision === "string")) policyList = parsed;
+    } catch { /* Use defaults if saved policy data is invalid. */ }
 
-    const [securitySettings, setSecuritySettings] = useState({
+    function createRule(event: React.FormEvent<HTMLFormElement>) {
+        event.preventDefault();
+        const data = new FormData(event.currentTarget);
+        const rule = String(data.get("rule") ?? "").trim();
+        const decision = String(data.get("decision") ?? "");
+        if (rule.length < 5 || rule.length > 200 || !["DENY", "HOLD", "APPROVE"].includes(decision)) {
+            setRuleMessage("Enter a rule description and choose a valid decision.");
+            return;
+        }
+        const next = { id: String(policyList.length + 1).padStart(2, "0"), rule, decision };
+        try {
+            localStorage.setItem("zonegate.policies.v1", JSON.stringify([...policyList, next]));
+            window.dispatchEvent(new Event("zonegate-settings"));
+            setShowRuleForm(false);
+            setRuleMessage("Rule created and saved in this browser.");
+        } catch {
+            setRuleMessage("Could not save the rule. Check browser storage permissions and try again.");
+        }
+    }
+    const [showZoneForm, setShowZoneForm] = useState(false);
+    const [zoneMessage, setZoneMessage] = useState("");
+    const storedZones = useSyncExternalStore(subscribeSettings, () => {
+        try { return localStorage.getItem("zonegate.zones.v1"); } catch { return null; }
+    }, () => null);
+    let zoneList = zones;
+    try {
+        const parsed = storedZones ? JSON.parse(storedZones) : null;
+        if (Array.isArray(parsed) && parsed.every(item => item &&
+            ["name", "code", "type", "staff"].every(key => typeof item[key] === "string"))) zoneList = parsed;
+    } catch { /* Use the initial zones if browser data is invalid. */ }
+
+    function addZone(event: React.FormEvent<HTMLFormElement>) {
+        event.preventDefault();
+        const data = new FormData(event.currentTarget);
+        const name = String(data.get("name") ?? "").trim();
+        const code = String(data.get("code") ?? "").trim();
+        const type = String(data.get("type") ?? "").trim();
+        const staffText = String(data.get("staff") ?? "").trim();
+        const staff = Number(staffText);
+        if (!name || !code || !type || !staffText || !Number.isSafeInteger(staff) || staff < 0) {
+            setZoneMessage("Complete all fields and enter a valid, non-negative staff count.");
+            return;
+        }
+        if (zoneList.some(zone => zone.name.toLowerCase() === name.toLowerCase())) {
+            setZoneMessage("A zone with this name already exists.");
+            return;
+        }
+        try {
+            localStorage.setItem("zonegate.zones.v1", JSON.stringify([...zoneList, { name, code, type, staff: `${staff} Staff` }]));
+            window.dispatchEvent(new Event("zonegate-settings"));
+            setShowZoneForm(false);
+            setZoneMessage(`${name} added. Saved in this browser.`);
+        } catch {
+            setZoneMessage("Could not save the zone. Check browser storage permissions and try again.");
+        }
+    }
+    const general = useSettingsDraft("general", {
+        organization: "ZoneGate Logistics Global Berth",
+        timezone: "UTC +03:00 (Kuwait, Riyadh, Nairobi)",
+        locale: "English (US) - UTF-8 Compliant",
+        dateFormat: "DD/MM/YYYY · 24-hour (ISO 8601 Tabular)",
+        defaultView: "all",
+    });
+    const defaultView = general.value.defaultView;
+    const setDefaultView = (defaultView: string) => general.setValue(prev => ({ ...prev, defaultView }));
+
+    const security = useSettingsDraft<Record<"deterministic" | "manualApproval" | "deviceBinding" | "anomalyLockout", boolean>>("security", {
         deterministic: true,
         manualApproval: true,
         deviceBinding: true,
         anomalyLockout: true,
     });
 
-    const [notifications, setNotifications] = useState({
+    const notificationSettings = useSettingsDraft<Record<"denied" | "hold" | "nodeOffline" | "policyChanges", boolean>>("notifications", {
         denied: true,
         hold: true,
         nodeOffline: true,
         policyChanges: false,
     });
+
+    const securitySettings = security.value;
+    const setSecuritySettings = security.setValue;
+    const notifications = notificationSettings.value;
+    const setNotifications = notificationSettings.setValue;
 
     return (
         <div className="flex w-full flex-col gap-6">
@@ -95,9 +173,9 @@ export default function SettingsPage() {
                 <div>
                     <div className="mb-2 flex flex-wrap items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-[#64748B]">
                         <span>Configuration & Policy Engine</span>
-                        <span>//</span>
+                        <span>{"//"}</span>
                         <span>NODE_T4_CONF</span>
-                        <span>//</span>
+                        <span>{"//"}</span>
                         <span className="font-semibold text-[#0D9488]">
                             System Integrity Verified
                         </span>
@@ -120,130 +198,82 @@ export default function SettingsPage() {
                     </p>
                 </div>
 
-                <div className="flex flex-wrap gap-2">
-                    <button className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-wider transition hover:border-[#0F172A]">
-                        <Download size={15} className="text-[#64748B]" />
-                        Export Config (.json)
-                    </button>
-
-                    <button className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-wider transition hover:border-[#0F172A]">
-                        <RefreshCw size={15} className="text-[#64748B]" />
-                        Commit Node
-                    </button>
-                </div>
             </section>
 
-            <section className="grid grid-cols-1 items-start gap-6 lg:grid-cols-12">
-                {/* LEFT NAV */}
-                <aside className="flex flex-col gap-4 lg:sticky lg:top-20 lg:col-span-3">
+            <section className="flex min-w-0 flex-col gap-6">
+                {/* SECTION MENU */}
+                <div className="w-full">
                     <div className="rounded-lg border border-[#E2E8F0] bg-white p-2 shadow-sm">
-                        <div className="border-b border-[#E2E8F0] px-3 py-2">
-                            <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-[#64748B]">
-                                Control Subsections
-                            </span>
-                        </div>
 
-                        <nav className="flex flex-col gap-1 pt-2">
+                        <nav aria-label="Settings sections" className="flex flex-wrap gap-2">
                             <SubNavItem
-                                href="#general"
+                                sectionId="general"
+                                active={activeSection === "general"}
+                                onClick={() => setActiveSection(activeSection === "general" ? null : "general")}
                                 icon={<Settings2 size={16} />}
                                 label="General"
-                                active
                             />
 
                             <SubNavItem
-                                href="#zones"
+                                sectionId="zones"
+                                active={activeSection === "zones"}
+                                onClick={() => setActiveSection(activeSection === "zones" ? null : "zones")}
                                 icon={<MapPin size={16} />}
                                 label="Locations & Zones"
-                                meta="4"
+                                meta={String(zoneList.length)}
                             />
 
                             <SubNavItem
-                                href="#policies"
+                                sectionId="policies"
+                                active={activeSection === "policies"}
+                                onClick={() => setActiveSection(activeSection === "policies" ? null : "policies")}
                                 icon={<Gavel size={16} />}
                                 label="Authorization Policies"
-                                meta="5"
+                                meta={String(policyList.length)}
                             />
 
                             <SubNavItem
-                                href="#security"
+                                sectionId="security"
+                                active={activeSection === "security"}
+                                onClick={() => setActiveSection(activeSection === "security" ? null : "security")}
                                 icon={<Lock size={16} />}
                                 label="Security"
                                 dot
                             />
 
                             <SubNavItem
-                                href="#notifications"
+                                sectionId="notifications"
+                                active={activeSection === "notifications"}
+                                onClick={() => setActiveSection(activeSection === "notifications" ? null : "notifications")}
                                 icon={<Bell size={16} />}
                                 label="Notifications"
-                                meta="7 ACT"
+                                meta={`${Object.values(notifications).filter(Boolean).length} ACT`}
                             />
                         </nav>
                     </div>
 
-                    {/* HARDWARE NODE */}
-                    <div className="rounded-lg border border-[#E2E8F0] bg-white p-4 shadow-sm">
-                        <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-2">
-                            <span className="font-mono text-[10px] uppercase text-[#64748B]">
-                                Hardware Node ID
-                            </span>
+                </div>
 
-                            <span className="font-mono text-[11px] text-[#0F172A]">
-                                ZK-904-HX
-                            </span>
-                        </div>
-
-                        <div className="mt-3">
-                            <div className="flex justify-between font-mono text-[10px] text-[#64748B]">
-                                <span>RAM Allocation</span>
-                                <span className="text-[#0F172A]">2.8 GB / 8.0 GB</span>
-                            </div>
-
-                            <div className="mt-2 h-1 overflow-hidden rounded-full bg-[#F1F5F9]">
-                                <div className="h-full w-[35%] bg-[#0D9488]" />
-                            </div>
-                        </div>
-
-                        <div className="mt-4 flex justify-between font-mono text-[10px] text-[#64748B]">
-                            <span>Firmware Checksum</span>
-                            <span className="text-[#0F172A]">0x8b32..4f9</span>
-                        </div>
-
-                        <div className="mt-4 flex items-center gap-2 rounded border border-[#CCFBF1] bg-[#F0FDFA] p-2">
-                            <Server size={15} className="text-[#0D9488]" />
-
-                            <div>
-                                <p className="font-mono text-[10px] font-semibold text-[#0F766E]">
-                                    NODE HEALTHY
-                                </p>
-                                <p className="font-mono text-[9px] text-[#64748B]">
-                                    UPTIME 99.998%
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-                </aside>
-
-                {/* RIGHT CONTENT */}
-                <div className="flex flex-col gap-8 lg:col-span-9">
+                {/* SELECTED SECTION */}
+                <div className={activeSection ? "w-full min-w-0" : "hidden"}>
                     {/* GENERAL */}
                     <SettingsSection
                         id="general"
+                        hidden={activeSection !== "general"}
                         icon={<Settings2 size={18} />}
                         title="General"
                         description="Manage primary enterprise identity, telemetry synchronization, and display metrics."
-                        section="01"
                     >
                         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
                             <Field label="Organization Name">
                                 <input
                                     className={inputStyle}
-                                    defaultValue="ZoneGate Logistics Global Berth"
+                                    value={general.value.organization} onChange={event => general.setValue(prev => ({ ...prev, organization: event.target.value }))}
                                 />
                             </Field>
 
                             <Field label="Node Timezone Standard">
-                                <select className={inputStyle}>
+                                <select className={inputStyle} value={general.value.timezone} onChange={event => general.setValue(prev => ({ ...prev, timezone: event.target.value }))}>
                                     <option>
                                         UTC +03:00 (Kuwait, Riyadh, Nairobi)
                                     </option>
@@ -254,7 +284,7 @@ export default function SettingsPage() {
                             </Field>
 
                             <Field label="Interface Locale & Encoding">
-                                <select className={inputStyle}>
+                                <select className={inputStyle} value={general.value.locale} onChange={event => general.setValue(prev => ({ ...prev, locale: event.target.value }))}>
                                     <option>English (US) - UTF-8 Compliant</option>
                                     <option>English (UK) - Metric Port Standard</option>
                                     <option>French - Maritime Port Protocol</option>
@@ -265,7 +295,7 @@ export default function SettingsPage() {
                             <Field label="Date & Time Precision">
                                 <input
                                     className={inputStyle}
-                                    defaultValue="DD/MM/YYYY · 24-hour (ISO 8601 Tabular)"
+                                    value={general.value.dateFormat} onChange={event => general.setValue(prev => ({ ...prev, dateFormat: event.target.value }))}
                                 />
                             </Field>
                         </div>
@@ -296,22 +326,47 @@ export default function SettingsPage() {
                             </div>
                         </div>
 
-                        <SectionActions />
+                        <SectionActions onSave={general.save} onCancel={general.cancel} dirty={general.dirty} message={general.message} />
                     </SettingsSection>
 
                     {/* LOCATIONS */}
                     <SettingsSection
                         id="zones"
+                        hidden={activeSection !== "zones"}
                         icon={<MapPin size={18} />}
                         title="Locations & Zones"
                         description="Manage physical perimeter barriers, geofence anchors, and operational authorization zones."
                         action={
-                            <button className={primaryButton}>
+                            <button type="button" aria-expanded={showZoneForm} aria-controls="add-zone-form" onClick={() => { setShowZoneForm(true); setZoneMessage(""); }} className={primaryButton}>
                                 <Plus size={15} />
                                 Add Zone
                             </button>
                         }
                     >
+                        {showZoneForm && (
+                            <form id="add-zone-form" onSubmit={addZone} className="rounded border border-[#E2E8F0] bg-[#F8FAFC] p-4">
+                                <h3 className="mb-4 text-sm font-semibold">Add a new zone</h3>
+                                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                    <Field label="Zone name"><input autoFocus required name="name" maxLength={100} className={inputStyle} placeholder="e.g. Warehouse C" /></Field>
+                                    <Field label="Zone code / description"><input required name="code" maxLength={150} className={inputStyle} placeholder="e.g. NORTH STORAGE FACILITY" /></Field>
+                                    <Field label="Perimeter type">
+                                        <select required name="type" className={inputStyle}>
+                                            <option value="">Select a type</option>
+                                            <option>Port Turnstile &amp; Barrier</option>
+                                            <option>High-Density Warehouse</option>
+                                            <option>Loading &amp; Staging Area</option>
+                                            <option>Other</option>
+                                        </select>
+                                    </Field>
+                                    <Field label="Authorized staff count"><input required type="number" name="staff" min="0" max="1000000" step="1" defaultValue="0" className={inputStyle} /></Field>
+                                </div>
+                                <div className="mt-4 flex justify-end gap-2">
+                                    <button type="button" className={secondaryButton} onClick={() => { setShowZoneForm(false); setZoneMessage(""); }}>Cancel</button>
+                                    <button type="submit" className={primaryButton}>Save Zone</button>
+                                </div>
+                            </form>
+                        )}
+                        {zoneMessage && <p role="status" className="text-xs text-[#64748B]">{zoneMessage}</p>}
                         <div className="overflow-x-auto rounded border border-[#E2E8F0]">
                             <table className="w-full min-w-[760px] text-left">
                                 <thead>
@@ -334,7 +389,7 @@ export default function SettingsPage() {
                                 </thead>
 
                                 <tbody className="divide-y divide-[#E2E8F0]">
-                                    {zones.map((zone) => (
+                                    {zoneList.map((zone) => (
                                         <tr
                                             key={zone.name}
                                             className="transition hover:bg-[#F8FAFC]"
@@ -388,6 +443,7 @@ export default function SettingsPage() {
                     {/* POLICIES */}
                     <SettingsSection
                         id="policies"
+                        hidden={activeSection !== "policies"}
                         icon={<Gavel size={18} />}
                         title="Authorization Policies"
                         description="Configure mathematical evidence requirements and rule chains for mission-critical operations."
@@ -397,7 +453,7 @@ export default function SettingsPage() {
                                     Edit Policy
                                 </button>
 
-                                <button className={primaryButton}>
+                                <button type="button" aria-expanded={showRuleForm} aria-controls="create-rule-form" onClick={() => { setShowRuleForm(true); setRuleMessage(""); }} className={primaryButton}>
                                     <Plus size={15} />
                                     Create Rule
                                 </button>
@@ -470,13 +526,25 @@ export default function SettingsPage() {
                                 </div>
                             </div>
 
+                            {showRuleForm && (
+                                <form id="create-rule-form" onSubmit={createRule} className="mt-5 rounded border border-[#E2E8F0] bg-[#F8FAFC] p-4">
+                                    <h3 className="mb-3 text-sm font-semibold">Create authorization rule</h3>
+                                    <div className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_auto]">
+                                        <Field label="Rule description"><input autoFocus required name="rule" minLength={5} maxLength={200} className={inputStyle} placeholder="e.g. Expired credential detected" /></Field>
+                                        <Field label="Decision"><select required name="decision" defaultValue="HOLD" className={inputStyle}><option>DENY</option><option>HOLD</option><option>APPROVE</option></select></Field>
+                                    </div>
+                                    <div className="mt-4 flex justify-end gap-2"><button type="button" className={secondaryButton} onClick={() => { setShowRuleForm(false); setRuleMessage(""); }}>Cancel</button><button type="submit" className={primaryButton}>Save Rule</button></div>
+                                </form>
+                            )}
+                            {ruleMessage && <p role="status" className="mt-3 text-xs text-[#64748B]">{ruleMessage}</p>}
+
                             <div className="mt-6">
                                 <p className="mb-2 font-mono text-[10px] font-semibold uppercase text-[#64748B]">
                                     Deterministic Decision Matrix
                                 </p>
 
                                 <div className="overflow-hidden rounded border border-[#E2E8F0]">
-                                    {policies.map((policy) => (
+                                    {policyList.map((policy) => (
                                         <div
                                             key={policy.id}
                                             className="flex flex-col justify-between gap-2 border-b border-[#E2E8F0] p-3 last:border-b-0 sm:flex-row sm:items-center"
@@ -502,10 +570,10 @@ export default function SettingsPage() {
                     {/* SECURITY */}
                     <SettingsSection
                         id="security"
+                        hidden={activeSection !== "security"}
                         icon={<Lock size={18} />}
                         title="Security"
                         description="Configure system-level boundaries, credential enforcement, and manual override safeguards."
-                        section="04"
                     >
                         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                             <ToggleCard
@@ -568,16 +636,16 @@ export default function SettingsPage() {
                             </p>
                         </div>
 
-                        <SectionActions />
+                        <SectionActions onSave={security.save} onCancel={security.cancel} dirty={security.dirty} message={security.message} />
                     </SettingsSection>
 
                     {/* NOTIFICATIONS */}
                     <SettingsSection
                         id="notifications"
+                        hidden={activeSection !== "notifications"}
                         icon={<Bell size={18} />}
                         title="Notifications"
                         description="Define operator alerts for authorization decisions, node health, and policy changes."
-                        section="05"
                     >
                         <div className="divide-y divide-[#E2E8F0] rounded border border-[#E2E8F0]">
                             <NotificationRow
@@ -641,11 +709,11 @@ export default function SettingsPage() {
 
                             <span className="inline-flex items-center gap-1.5 font-mono text-[10px] font-semibold text-[#0D9488]">
                                 <span className="h-1.5 w-1.5 rounded-full bg-[#1FD1A8]" />
-                                7 ACTIVE RULES
+                                {Object.values(notifications).filter(Boolean).length} ACTIVE RULES
                             </span>
                         </div>
 
-                        <SectionActions />
+                        <SectionActions onSave={notificationSettings.save} onCancel={notificationSettings.cancel} dirty={notificationSettings.dirty} message={notificationSettings.message} />
                     </SettingsSection>
                 </div>
             </section>
@@ -664,24 +732,25 @@ const secondaryButton =
 
 function SettingsSection({
     id,
+    hidden,
     icon,
     title,
     description,
-    section,
     action,
     children,
 }: {
     id: string;
+    hidden: boolean;
     icon: React.ReactNode;
     title: string;
     description: string;
-    section?: string;
     action?: React.ReactNode;
     children: React.ReactNode;
 }) {
     return (
         <section
             id={id}
+            hidden={hidden}
             className="scroll-mt-24 rounded-lg border border-[#E2E8F0] bg-white p-6 shadow-sm"
         >
             <div className="mb-5 flex flex-col justify-between gap-3 border-b border-[#E2E8F0] pb-4 sm:flex-row sm:items-start">
@@ -699,13 +768,7 @@ function SettingsSection({
                     </p>
                 </div>
 
-                {action ? (
-                    action
-                ) : section ? (
-                    <span className="rounded border border-[#E2E8F0] bg-[#F8FAFC] px-2 py-1 font-mono text-[10px] text-[#64748B]">
-                        SECTION // {section}
-                    </span>
-                ) : null}
+                {action}
             </div>
 
             <div className="flex flex-col gap-5">{children}</div>
@@ -714,14 +777,16 @@ function SettingsSection({
 }
 
 function SubNavItem({
-    href,
+    sectionId,
+    onClick,
     icon,
     label,
     meta,
     active,
     dot,
 }: {
-    href: string;
+    sectionId: string;
+    onClick: () => void;
     icon: React.ReactNode;
     label: string;
     meta?: string;
@@ -729,9 +794,12 @@ function SubNavItem({
     dot?: boolean;
 }) {
     return (
-        <a
-            href={href}
-            className={`flex items-center justify-between rounded px-3 py-2 text-xs transition ${active
+        <button
+            type="button"
+            onClick={onClick}
+            aria-expanded={Boolean(active)}
+            aria-controls={sectionId}
+            className={`flex items-center justify-between gap-3 rounded px-4 py-3 text-xs transition ${active
                     ? "bg-[#F0FDFA] text-[#0F172A]"
                     : "text-[#64748B] hover:bg-[#F8FAFC] hover:text-[#0F172A]"
                 }`}
@@ -748,7 +816,7 @@ function SubNavItem({
             ) : meta ? (
                 <span className="font-mono text-[10px]">{meta}</span>
             ) : null}
-        </a>
+        </button>
     );
 }
 
@@ -800,12 +868,18 @@ function RadioCard({
     );
 }
 
-function SectionActions() {
+function SectionActions({ onSave, onCancel, dirty, message }: {
+    onSave: () => void;
+    onCancel: () => void;
+    dirty: boolean;
+    message: string;
+}) {
     return (
-        <div className="flex justify-end gap-2 border-t border-[#E2E8F0] pt-4">
-            <button className={secondaryButton}>Cancel</button>
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-[#E2E8F0] pt-4">
+            <span role="status" className="mr-auto text-xs text-[#64748B]">{message || (dirty ? "Unsaved changes" : "Settings are saved in this browser.")}</span>
+            <button type="button" onClick={onCancel} disabled={!dirty} className={`${secondaryButton} disabled:opacity-40`}>Cancel</button>
 
-            <button className={primaryButton}>
+            <button type="button" onClick={onSave} disabled={!dirty} className={`${primaryButton} disabled:opacity-40`}>
                 Save Changes
             </button>
         </div>
@@ -948,4 +1022,55 @@ function Toggle({
             />
         </button>
     );
+}
+
+function subscribeSettings(callback: () => void) {
+    window.addEventListener("storage", callback);
+    window.addEventListener("zonegate-settings", callback);
+    return () => {
+        window.removeEventListener("storage", callback);
+        window.removeEventListener("zonegate-settings", callback);
+    };
+}
+
+function useSettingsDraft<T extends Record<string, string | boolean>>(section: string, defaults: T) {
+    const key = `zonegate.settings.${section}.v1`;
+    const raw = useSyncExternalStore(subscribeSettings, () => {
+        try { return localStorage.getItem(key); } catch { return null; }
+    }, () => null);
+    let saved = defaults;
+    try {
+        const parsed = raw ? JSON.parse(raw) : null;
+        if (parsed && Object.keys(defaults).every(field => typeof parsed[field] === typeof defaults[field])) saved = parsed;
+    } catch { /* Ignore invalid stored data and use defaults. */ }
+    const [draft, setDraft] = useState<T | null>(null);
+    const [message, setMessage] = useState("");
+    const value = draft ?? saved;
+    return {
+        value,
+        dirty: JSON.stringify(value) !== JSON.stringify(saved),
+        message,
+        setValue: (update: (previous: T) => T) => {
+            setDraft(previous => update(previous ?? saved));
+            setMessage("");
+        },
+        save: () => {
+            if (Object.values(value).some(item => typeof item === "string" && !item.trim())) {
+                setMessage("Please complete all fields before saving.");
+                return;
+            }
+            try {
+                localStorage.setItem(key, JSON.stringify(value));
+                window.dispatchEvent(new Event("zonegate-settings"));
+                setDraft(null);
+                setMessage("Changes saved in this browser.");
+            } catch {
+                setMessage("Could not save changes. Check browser storage permissions and try again.");
+            }
+        },
+        cancel: () => {
+            setDraft(null);
+            setMessage("Changes cancelled. Last saved settings restored.");
+        },
+    };
 }

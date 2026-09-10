@@ -1,4 +1,4 @@
-import { Clock3, Search, User } from "lucide-react";
+import { Clock3, Search } from "lucide-react";
 
 export default function Header() {
   return (
@@ -47,9 +47,6 @@ export default function Header() {
           </span>
         </div>
 
-        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#0F172A]">
-          <User size={17} className="text-white" />
-        </div>
       </div>
     </header>
   );

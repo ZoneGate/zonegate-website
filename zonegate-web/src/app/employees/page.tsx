@@ -4,15 +4,12 @@ import {
     BadgeCheck,
     Ban,
     Download,
-    Fingerprint,
     Gavel,
     MoreVertical,
     Search,
-    Settings2,
     ShieldCheck,
     Timer,
     Truck,
-    Cpu,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -192,7 +189,12 @@ export default function EmployeesPage() {
     const [affiliation, setAffiliation] = useState("ALL");
     const [clearance, setClearance] = useState("ALL");
     const [biometrics, setBiometrics] = useState("ALL");
-    const [selectedId, setSelectedId] = useState("ZG-88219");
+    const [selectedId, setSelectedId] = useState<string | null>(null);
+    const [showSyslog, setShowSyslog] = useState(false);
+    const [editingPermissions, setEditingPermissions] = useState(false);
+    const [actionMessage, setActionMessage] = useState("");
+    const [permissionTier, setPermissionTier] = useState("L1");
+    const [escortEnabled, setEscortEnabled] = useState(true);
 
     const filteredPersonnel = useMemo(() => {
         return personnel.filter((person) => {
@@ -212,8 +214,22 @@ export default function EmployeesPage() {
         });
     }, [search, affiliation, clearance]);
 
-    const selectedPerson =
-        personnel.find((person) => person.id === selectedId) ?? personnel[0];
+    const selectedPerson = personnel.find((person) => person.id === selectedId);
+
+    function exportLedger() {
+        const escape = (value: string) => `"${value.replaceAll('"', '""')}"`;
+        const rows = [
+            ["Personnel ID", "Name", "Role", "Affiliation", "Clearance", "Expiration", "Checkpoint", "Telemetry"],
+            ...filteredPersonnel.map((person) => [person.id, person.name, person.role, person.affiliation, person.clearance, person.expiration, person.checkpoint, person.telemetry]),
+        ];
+        const blob = new Blob([`\uFEFF${rows.map((row) => row.map(escape).join(",")).join("\r\n")}`], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "zonegate-personnel-ledger.csv";
+        link.click();
+        URL.revokeObjectURL(url);
+    }
 
     return (
         <div className="flex w-full flex-col">
@@ -350,18 +366,18 @@ export default function EmployeesPage() {
                         SHOWING {filteredPersonnel.length} OF 1,840
                     </span>
 
-                    <button className="flex items-center gap-1.5 rounded border border-[#E2E8F0] bg-white px-3 py-1.5 font-mono text-xs font-semibold uppercase tracking-wider text-[#0F172A] transition hover:bg-[#F1F5F9]">
+                    <button type="button" onClick={exportLedger} className="flex items-center gap-1.5 rounded border border-[#E2E8F0] bg-white px-3 py-1.5 font-mono text-xs font-semibold uppercase tracking-wider text-[#0F172A] transition hover:bg-[#F1F5F9]">
                         <Download size={16} className="text-[#64748B]" />
                         Export Ledger
                     </button>
                 </div>
             </section>
 
-            <section className="grid grid-cols-1 items-start gap-5 xl:grid-cols-12">
-                <div className="flex flex-col gap-4 xl:col-span-8">
+            <section className="flex flex-col gap-5">
+                <div className="flex w-full flex-col gap-4">
                     <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white shadow-sm">
                         <div className="overflow-x-auto">
-                            <table className="w-full min-w-[1050px] text-left">
+                            <table className="w-full table-fixed text-left [overflow-wrap:anywhere]">
                                 <thead>
                                     <tr className="border-b border-[#E2E8F0] bg-[#F1F5F9] font-mono text-[11px] uppercase tracking-wider text-[#64748B]">
                                         {[
@@ -390,7 +406,10 @@ export default function EmployeesPage() {
                                         return (
                                             <tr
                                                 key={person.id}
-                                                onClick={() => setSelectedId(person.id)}
+                                                onClick={() => {
+                                                    setSelectedId(person.id);
+                                                    window.setTimeout(() => document.getElementById("active-dossier")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+                                                }}
                                                 className={`cursor-pointer transition hover:bg-[#F8FAFC] ${selected ? "bg-[#F0FDFA]" : ""
                                                     }`}
                                             >
@@ -492,31 +511,10 @@ export default function EmployeesPage() {
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                        <QuickCard
-                            title="Zone Config"
-                            icon={<Settings2 size={18} />}
-                            description="Auto-revoke temporary badges idling past 02:00 local time."
-                            footer="Policy Rules →"
-                        />
 
-                        <QuickCard
-                            title="Biometric Sync"
-                            icon={<Fingerprint size={18} />}
-                            description="Syncing optical iris hashes across Turnstiles T-01 through T-08."
-                            footer="99.98% COHERENCE"
-                        />
-
-                        <QuickCard
-                            title="Hardware Vault"
-                            icon={<Cpu size={18} />}
-                            description="RFID Secure Element HSM Node 04 is currently operating normally."
-                            footer="FIRMWARE: V2.4.9-RELEASE"
-                        />
-                    </div>
                 </div>
 
-                <aside className="flex flex-col gap-4 xl:col-span-4">
+                <aside className="flex w-full flex-col gap-4">
                     <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white shadow-sm">
                         <div className="flex items-center justify-between border-b border-[#E2E8F0] bg-[#F1F5F9] p-3.5">
                             <div className="flex items-center gap-2">
@@ -539,13 +537,14 @@ export default function EmployeesPage() {
                         </div>
 
                         <div className="border-t border-[#E2E8F0] bg-[#F1F5F9] p-3">
-                            <button className="w-full rounded border border-[#E2E8F0] bg-white py-1.5 text-center font-mono text-xs font-semibold uppercase text-[#0F172A] transition hover:bg-[#F8FAFC]">
+                            <button type="button" aria-expanded={showSyslog} onClick={() => setShowSyslog((value) => !value)} className="w-full rounded border border-[#E2E8F0] bg-white py-1.5 text-center font-mono text-xs font-semibold uppercase text-[#0F172A] transition hover:bg-[#F8FAFC]">
                                 Launch Raw Syslog Stream (&gt;_ TTY)
                             </button>
+                            {showSyslog && <pre className="mt-2 max-h-48 overflow-auto rounded bg-[#0F172A] p-3 font-mono text-[10px] leading-relaxed text-[#CCFBF1]" role="log">{auditEvents.slice(0, 6).map((event) => `${event.time}Z ${event.code} ${event.person} ${event.detail} ${event.result}`).join("\n")}</pre>}
                         </div>
                     </div>
 
-                    <div className="flex flex-col gap-3.5 rounded-lg border border-[#E2E8F0] bg-white p-4 shadow-sm">
+                    {selectedPerson && <div id="active-dossier" className="flex scroll-mt-20 flex-col gap-3.5 rounded-lg border border-[#E2E8F0] bg-white p-4 shadow-sm">
                         <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-2">
                             <span className="font-mono text-[11px] font-semibold uppercase tracking-wider text-[#64748B]">
                                 Active Dossier Preview
@@ -567,7 +566,7 @@ export default function EmployeesPage() {
                                 </p>
 
                                 <p className="text-xs text-[#64748B]">
-                                    {selectedPerson.affiliation} // Logistics Div
+                                    {selectedPerson.affiliation}{" // Logistics Div"}
                                 </p>
 
                                 <p className="mt-1 font-mono text-xs font-semibold text-[#0D9488]">
@@ -599,15 +598,24 @@ export default function EmployeesPage() {
                         </div>
 
                         <div className="flex gap-2.5 pt-1">
-                            <button className="flex-1 rounded bg-[#0D9488] py-2 font-mono text-xs font-semibold uppercase tracking-wider text-white transition hover:bg-[#0F766E]">
-                                Modify Permissions
+                            <button type="button" onClick={() => { if (editingPermissions) setActionMessage(`Permissions saved: ${permissionTier} clearance, escort ${escortEnabled ? "enabled" : "disabled"}.`); else setActionMessage(""); setEditingPermissions((value) => !value); }} className="flex-1 rounded bg-[#0D9488] py-2 font-mono text-xs font-semibold uppercase tracking-wider text-white transition hover:bg-[#0F766E]">
+                                {editingPermissions ? "Save Permissions" : "Modify Permissions"}
                             </button>
 
-                            <button className="flex-1 rounded border border-[#E2E8F0] bg-white py-2 font-mono text-xs font-semibold uppercase tracking-wider text-[#0F172A] transition hover:bg-[#F1F5F9]">
+                            <button type="button" onClick={() => { window.print(); setActionMessage("Print dialog opened for this smart badge."); }} className="flex-1 rounded border border-[#E2E8F0] bg-white py-2 font-mono text-xs font-semibold uppercase tracking-wider text-[#0F172A] transition hover:bg-[#F1F5F9]">
                                 Print Smart Badge
                             </button>
                         </div>
-                    </div>
+                        {editingPermissions && <div className="grid grid-cols-1 gap-3 rounded border border-[#CCFBF1] bg-[#F0FDFA] p-3 sm:grid-cols-2">
+                            <label className="flex flex-col gap-1 text-[10px] font-semibold uppercase text-[#0F766E]">Clearance tier
+                                <select value={permissionTier} onChange={(event) => setPermissionTier(event.target.value)} className="rounded border border-[#99F6E4] bg-white px-2 py-2 font-mono text-xs text-[#0F172A]">
+                                    <option>L1</option><option>L2</option><option>L3</option>
+                                </select>
+                            </label>
+                            <label className="flex items-center gap-2 self-end text-xs text-[#0F766E]"><input type="checkbox" checked={escortEnabled} onChange={(event) => setEscortEnabled(event.target.checked)} className="accent-[#0D9488]" /> Escort privilege enabled</label>
+                        </div>}
+                        {actionMessage && <p role="status" className="text-xs text-[#64748B]">{actionMessage}</p>}
+                    </div>}
                 </aside>
             </section>
         </div>
@@ -741,36 +749,6 @@ function StatusBadge({ status }: { status: TelemetryStatus }) {
             <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
             {status}
         </span>
-    );
-}
-
-function QuickCard({
-    title,
-    icon,
-    description,
-    footer,
-}: {
-    title: string;
-    icon: React.ReactNode;
-    description: string;
-    footer: string;
-}) {
-    return (
-        <div className="flex flex-col justify-between gap-2.5 rounded-lg border border-[#E2E8F0] bg-white p-4 shadow-sm">
-            <div className="flex items-start justify-between">
-                <span className="font-mono text-[11px] font-semibold uppercase tracking-wider text-[#64748B]">
-                    {title}
-                </span>
-
-                <span className="text-[#0D9488]">{icon}</span>
-            </div>
-
-            <p className="text-xs text-[#0F172A]">{description}</p>
-
-            <span className="font-mono text-xs font-semibold uppercase tracking-wider text-[#0D9488]">
-                {footer}
-            </span>
-        </div>
     );
 }
 

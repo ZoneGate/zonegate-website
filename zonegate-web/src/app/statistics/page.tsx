@@ -9,7 +9,7 @@ import {
     ShieldAlert,
     Smartphone,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
     CartesianGrid,
     Cell,
@@ -30,14 +30,50 @@ const decisionData = [
 ];
 
 const activityData = [
-    { day: "MON", approved: 136, hold: 8, denied: 3 },
-    { day: "TUE", approved: 148, hold: 7, denied: 4 },
-    { day: "WED", approved: 125, hold: 10, denied: 2 },
-    { day: "THU", approved: 172, hold: 6, denied: 4 },
-    { day: "FRI", approved: 161, hold: 9, denied: 3 },
-    { day: "SAT", approved: 188, hold: 12, denied: 5 },
-    { day: "SUN", approved: 194, hold: 8, denied: 3 },
+    // Explicit demo dates; replace these records with dated API results when available.
+    { date: "2026-08-31", approved: 136, hold: 8, denied: 3 },
+    { date: "2026-09-01", approved: 148, hold: 7, denied: 4 },
+    { date: "2026-09-02", approved: 125, hold: 10, denied: 2 },
+    { date: "2026-09-03", approved: 172, hold: 6, denied: 4 },
+    { date: "2026-09-04", approved: 161, hold: 9, denied: 3 },
+    { date: "2026-09-05", approved: 188, hold: 12, denied: 5 },
+    { date: "2026-09-06", approved: 194, hold: 8, denied: 3 },
 ];
+
+type ActivityPeriod = "Weekly" | "Monthly" | "Yearly" | "Specific Day";
+
+function getActivityView(period: ActivityPeriod, date: string) {
+    const anchor = new Date(`${date}T00:00:00Z`);
+    const start = new Date(anchor);
+    const end = new Date(anchor);
+    if (period === "Weekly") start.setUTCDate(start.getUTCDate() - 6);
+    if (period === "Monthly") {
+        start.setUTCDate(1);
+        end.setUTCMonth(end.getUTCMonth() + 1, 0);
+    }
+    if (period === "Yearly") {
+        start.setUTCMonth(0, 1);
+        end.setUTCMonth(11, 31);
+    }
+    const iso = (value: Date) => value.toISOString().slice(0, 10);
+    const records = activityData.filter((item) => item.date >= iso(start) && item.date <= iso(end));
+    const points = [];
+    for (const cursor = new Date(start); cursor <= end;) {
+        const key = iso(cursor);
+        const matches = records.filter((item) => period === "Yearly"
+            ? item.date.slice(0, 7) === key.slice(0, 7)
+            : item.date === key);
+        points.push({
+            day: period === "Yearly" ? key.slice(0, 7) : key,
+            approved: matches.length ? matches.reduce((sum, item) => sum + item.approved, 0) : null,
+            hold: matches.length ? matches.reduce((sum, item) => sum + item.hold, 0) : null,
+            denied: matches.length ? matches.reduce((sum, item) => sum + item.denied, 0) : null,
+        });
+        if (period === "Yearly") cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+        else cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+    return { points, start: iso(start), end: iso(end), availableDays: records.length };
+}
 
 const locationData = [
     {
@@ -123,6 +159,33 @@ const timeFilters = ["Today", "Last 7 Days", "Last 30 Days", "Custom Date"];
 export default function StatisticsPage() {
     const [timeFilter, setTimeFilter] = useState("Last 7 Days");
     const [location, setLocation] = useState("All Locations");
+    const [incidentFilter, setIncidentFilter] = useState("ALL");
+    const [activityPeriod, setActivityPeriod] = useState<ActivityPeriod>("Weekly");
+    const [activityDate, setActivityDate] = useState("2026-09-06");
+    const [chartZoom, setChartZoom] = useState(1);
+    const [chartPan, setChartPan] = useState(0);
+    const dragStart = useRef<number | null>(null);
+    const panStart = useRef(0);
+    const activityView = getActivityView(activityPeriod, activityDate);
+    const filteredIncidents = incidents.filter((incident) => incidentFilter === "ALL" || incident.decision === incidentFilter);
+
+    function exportCsv() {
+        const escape = (value: string | number | null) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+        const rows = [
+            ["Date", "Approved", "On Hold", "Denied"],
+            ...activityView.points.map((point) => [point.day, point.approved, point.hold, point.denied]),
+        ];
+        const csv = rows.map((row) => row.map(escape).join(",")).join("\r\n");
+        const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `zonegate-activity-${activityView.start}-${activityView.end}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+    }
 
     return (
         <div className="flex w-full flex-col gap-6">
@@ -178,7 +241,7 @@ export default function StatisticsPage() {
                         <option>Loading Zone 3</option>
                     </select>
 
-                    <button className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-white px-3 py-2 text-[10px] font-semibold uppercase text-[#0F172A] transition hover:border-[#0D9488]">
+                    <button type="button" onClick={exportCsv} className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-white px-3 py-2 text-[10px] font-semibold uppercase text-[#0F172A] transition hover:border-[#0D9488]">
                         <Download size={15} className="text-[#64748B]" />
                         Export CSV
                     </button>
@@ -333,20 +396,64 @@ export default function StatisticsPage() {
                             </span>
 
                             <span className="font-mono text-[10px] text-[#64748B]">
-                                CYCLE: 7-DAY TRAJECTORY
+                                {activityPeriod.toUpperCase()}
                             </span>
                         </div>
 
-                        <div className="mt-3 flex gap-5 font-mono text-[10px]">
+                        <div className="mt-4 flex flex-wrap items-end gap-3">
+                            <div className="flex flex-wrap gap-1 rounded border border-[#E2E8F0] bg-[#F8FAFC] p-1" aria-label="Activity period">
+                                {(["Weekly", "Monthly", "Yearly", "Specific Day"] as const).map((period) => (
+                                    <button key={period} aria-pressed={activityPeriod === period} onClick={() => setActivityPeriod(period)}
+                                        className={`rounded px-3 py-2 text-[10px] font-semibold uppercase transition ${activityPeriod === period ? "bg-[#0D9488] text-white" : "text-[#64748B] hover:bg-[#E2E8F0]"}`}>
+                                        {period}
+                                    </button>
+                                ))}
+                            </div>
+                            <label className="flex flex-col gap-1 text-[10px] uppercase text-[#64748B]">
+                                {activityPeriod === "Weekly" ? "Week ending" : activityPeriod === "Monthly" ? "Month" : activityPeriod === "Yearly" ? "Year" : "Date"}
+                                <input
+                                    type={activityPeriod === "Yearly" ? "number" : activityPeriod === "Monthly" ? "month" : "date"}
+                                    min={activityPeriod === "Yearly" ? "2000" : "2000-01" + (activityPeriod === "Monthly" ? "" : "-01")}
+                                    max={activityPeriod === "Yearly" ? "2100" : "2100-12" + (activityPeriod === "Monthly" ? "" : "-31")}
+                                    value={activityPeriod === "Yearly" ? activityDate.slice(0, 4) : activityPeriod === "Monthly" ? activityDate.slice(0, 7) : activityDate}
+                                    onChange={(event) => {
+                                        const value = event.target.value;
+                                        if (!value || !event.target.validity.valid) return;
+                                        setActivityDate(activityPeriod === "Yearly" ? `${value}-01-01` : activityPeriod === "Monthly" ? `${value}-01` : value);
+                                    }}
+                                    className="rounded border border-[#E2E8F0] bg-white px-3 py-2 font-mono text-xs text-[#0F172A] outline-none focus:border-[#0D9488]"
+                                />
+                            </label>
+                        </div>
+                        <p aria-live="polite" className="mt-3 font-mono text-[10px] text-[#64748B]">{activityView.start} — {activityView.end}</p>
+
+                        <div className="mt-3 flex items-center justify-between gap-4 font-mono text-[10px]">
+                            <div className="flex flex-wrap gap-5">
                             <LegendItem color="#0D9488" label="Approved" />
                             <LegendItem color="#D97706" label="On Hold" />
                             <LegendItem color="#DC2626" label="Denied" />
+                            </div>
+                            <div className="flex shrink-0 items-center gap-1 rounded border border-[#E2E8F0] bg-white p-1 shadow-sm">
+                                <button type="button" onClick={() => { setChartZoom((value) => Math.max(0.8, Number((value - 0.2).toFixed(1)))); setChartPan(0); }} disabled={chartZoom <= 0.8} aria-label="Zoom out" className="flex h-7 w-7 items-center justify-center rounded text-base font-semibold text-[#64748B] hover:bg-[#F1F5F9] disabled:cursor-not-allowed disabled:opacity-40">−</button>
+                                <span className="min-w-12 text-center font-mono text-[10px] text-[#64748B]">{Math.round(chartZoom * 100)}%</span>
+                                <button type="button" onClick={() => setChartZoom((value) => Math.min(1.8, Number((value + 0.2).toFixed(1))))} disabled={chartZoom >= 1.8} aria-label="Zoom in" className="flex h-7 w-7 items-center justify-center rounded text-base font-semibold text-[#64748B] hover:bg-[#F1F5F9] disabled:cursor-not-allowed disabled:opacity-40">+</button>
+                            </div>
                         </div>
                     </div>
 
-                    <div className="mt-4 h-64">
+                    <div
+                        className="relative mt-4 h-64 cursor-grab overflow-hidden rounded border border-[#F1F5F9] active:cursor-grabbing"
+                        onPointerDown={(event) => { dragStart.current = event.clientX; panStart.current = chartPan; event.currentTarget.setPointerCapture(event.pointerId); }}
+                        onPointerMove={(event) => { if (dragStart.current !== null) setChartPan(panStart.current + event.clientX - dragStart.current); }}
+                        onPointerUp={() => { dragStart.current = null; }}
+                        onPointerCancel={() => { dragStart.current = null; }}
+                    >
+                        {activityView.availableDays === 0 ? (
+                            <div className="flex h-full items-center justify-center text-sm text-[#64748B]" role="status">No activity data for the selected period.</div>
+                        ) : (
+                        <div className="h-full w-full origin-center transition-transform duration-200" style={{ transform: `translateX(${chartPan}px) scale(${chartZoom})` }}>
                         <ResponsiveContainer width="100%" height="100%">
-                            <LineChart data={activityData}>
+                            <LineChart data={activityView.points}>
                                 <CartesianGrid
                                     stroke="#E2E8F0"
                                     strokeDasharray="3 3"
@@ -355,6 +462,7 @@ export default function StatisticsPage() {
 
                                 <XAxis
                                     dataKey="day"
+                                    tickFormatter={(value: string) => value.slice(5)}
                                     tick={{ fontSize: 10, fill: "#94A3B8" }}
                                     tickLine={false}
                                     axisLine={{ stroke: "#CBD5E1" }}
@@ -372,6 +480,7 @@ export default function StatisticsPage() {
 
                                 <Line
                                     dataKey="approved"
+                                    name="Approved"
                                     stroke="#0D9488"
                                     strokeWidth={2.5}
                                     dot={{ r: 3, fill: "#0D9488" }}
@@ -379,26 +488,30 @@ export default function StatisticsPage() {
 
                                 <Line
                                     dataKey="hold"
+                                    name="On Hold"
                                     stroke="#D97706"
                                     strokeWidth={1.5}
                                     strokeDasharray="5 4"
-                                    dot={false}
+                                    dot={{ r: 2 }}
                                 />
 
                                 <Line
                                     dataKey="denied"
+                                    name="Denied"
                                     stroke="#DC2626"
                                     strokeWidth={1.5}
                                     strokeDasharray="2 4"
-                                    dot={false}
+                                    dot={{ r: 2 }}
                                 />
                             </LineChart>
                         </ResponsiveContainer>
+                        </div>
+                        )}
                     </div>
 
                     <div className="flex items-center justify-between border-t border-[#E2E8F0] pt-3 font-mono text-[10px] text-[#64748B]">
-                        <span>TREND: +12.4% PEAK TRAFFIC DENSITY (FRI-SUN)</span>
-                        <span>LATENCY: NOMINAL</span>
+                        <span>DEMO DATA: AUG 31 – SEP 6, 2026 · {activityView.availableDays} DAYS AVAILABLE</span>
+                        <span>GAPS = NO DATA</span>
                     </div>
                 </div>
 
@@ -503,9 +616,14 @@ export default function StatisticsPage() {
                         Recent Denied & Hold Incidents
                     </span>
 
-                    <span className="font-mono text-[10px] text-[#64748B]">
-                        FILTER: NON-APPROVED ONLY
-                    </span>
+                    <label className="flex items-center gap-2 font-mono text-[10px] text-[#64748B]">
+                        FILTER:
+                        <select value={incidentFilter} onChange={(event) => setIncidentFilter(event.target.value)} aria-label="Incident decision filter" className="cursor-pointer rounded border border-[#E2E8F0] bg-white px-2 py-1 font-mono text-[10px] text-[#0F172A] outline-none focus:border-[#0D9488]">
+                            <option value="ALL">ALL NON-APPROVED</option>
+                            <option value="HOLD">HOLD ONLY</option>
+                            <option value="DENIED">DENIED ONLY</option>
+                        </select>
+                    </label>
                 </div>
 
                 <div className="overflow-x-auto">
@@ -532,7 +650,9 @@ export default function StatisticsPage() {
                         </thead>
 
                         <tbody className="divide-y divide-[#E2E8F0]">
-                            {incidents.map((incident) => (
+                            {filteredIncidents.length === 0 ? (
+                                <tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-[#64748B]">No incidents match this filter.</td></tr>
+                            ) : filteredIncidents.map((incident) => (
                                 <tr
                                     key={incident.id}
                                     className="transition hover:bg-[#0D9488]/5"
@@ -572,7 +692,7 @@ export default function StatisticsPage() {
 
                 <div className="flex items-center justify-between border-t border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3">
                     <span className="font-mono text-[10px] text-[#64748B]">
-                        Showing 5 of 110 filtered incidents
+                        Showing {filteredIncidents.length} of 110 filtered incidents
                     </span>
 
                     <div className="flex items-center gap-2">
