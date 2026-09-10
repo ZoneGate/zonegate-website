@@ -9,7 +9,20 @@ import {
     ShieldAlert,
     Smartphone,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+import {
+    ApiError,
+    listDecisionContexts,
+    type DecisionContext,
+} from "@/lib/api";
+import {
+    countByOutcome,
+    effectiveOutcome,
+    formatWait,
+    resolutionLatency,
+    shortTime,
+} from "@/lib/derive";
 import {
     CartesianGrid,
     Cell,
@@ -23,172 +36,427 @@ import {
     YAxis,
 } from "recharts";
 
-const decisionData = [
-    { name: "Approved", value: 1174, color: "#0D9488" },
-    { name: "On Hold", value: 74, color: "#D97706" },
-    { name: "Denied", value: 36, color: "#DC2626" },
-];
+/* ------------------------------------------------------------------ *
+ * Everything on this page is projected from the decision log.
+ *
+ * The API stores decisions, not analytics: no per-zone rollup, no daily
+ * counters, no incident feed. Those are built here from
+ * `/v1/authorizations/contexts`, so any figure on screen can be traced back
+ * to the decisions that produced it — and a zone only appears once a
+ * decision has actually targeted it.
+ * ------------------------------------------------------------------ */
 
-const activityData = [
-    // Explicit demo dates; replace these records with dated API results when available.
-    { date: "2026-08-31", approved: 136, hold: 8, denied: 3 },
-    { date: "2026-09-01", approved: 148, hold: 7, denied: 4 },
-    { date: "2026-09-02", approved: 125, hold: 10, denied: 2 },
-    { date: "2026-09-03", approved: 172, hold: 6, denied: 4 },
-    { date: "2026-09-04", approved: 161, hold: 9, denied: 3 },
-    { date: "2026-09-05", approved: 188, hold: 12, denied: 5 },
-    { date: "2026-09-06", approved: 194, hold: 8, denied: 3 },
-];
+type Zone = string;
 
-type ActivityPeriod = "Weekly" | "Monthly" | "Yearly" | "Specific Day";
+/** Colours cycle by position so a new zone still gets a stable slot. */
+const ZONE_COLORS = ["#0F172A", "#0D9488", "#475569", "#94A3B8", "#B45309", "#1D4ED8"];
 
-function getActivityView(period: ActivityPeriod, date: string) {
-    const anchor = new Date(`${date}T00:00:00Z`);
-    const start = new Date(anchor);
-    const end = new Date(anchor);
-    if (period === "Weekly") start.setUTCDate(start.getUTCDate() - 6);
-    if (period === "Monthly") {
-        start.setUTCDate(1);
-        end.setUTCMonth(end.getUTCMonth() + 1, 0);
-    }
-    if (period === "Yearly") {
-        start.setUTCMonth(0, 1);
-        end.setUTCMonth(11, 31);
-    }
-    const iso = (value: Date) => value.toISOString().slice(0, 10);
-    const records = activityData.filter((item) => item.date >= iso(start) && item.date <= iso(end));
-    const points = [];
-    for (const cursor = new Date(start); cursor <= end;) {
-        const key = iso(cursor);
-        const matches = records.filter((item) => period === "Yearly"
-            ? item.date.slice(0, 7) === key.slice(0, 7)
-            : item.date === key);
-        points.push({
-            day: period === "Yearly" ? key.slice(0, 7) : key,
-            approved: matches.length ? matches.reduce((sum, item) => sum + item.approved, 0) : null,
-            hold: matches.length ? matches.reduce((sum, item) => sum + item.hold, 0) : null,
-            denied: matches.length ? matches.reduce((sum, item) => sum + item.denied, 0) : null,
-        });
-        if (period === "Yearly") cursor.setUTCMonth(cursor.getUTCMonth() + 1);
-        else cursor.setUTCDate(cursor.getUTCDate() + 1);
-    }
-    return { points, start: iso(start), end: iso(end), availableDays: records.length };
+function zoneColor(index: number): string {
+    return ZONE_COLORS[index % ZONE_COLORS.length];
 }
 
-const locationData = [
-    {
-        name: "PORT GATE 17 (BERTH B)",
-        value: 420,
-        percent: "32.7%",
-        width: "32.7%",
-        color: "#0F172A",
-    },
-    {
-        name: "WAREHOUSE A (HIGH SEC)",
-        value: 318,
-        percent: "24.8%",
-        width: "24.8%",
-        color: "#0D9488",
-    },
-    {
-        name: "WAREHOUSE B (TRANSIT)",
-        value: 284,
-        percent: "22.1%",
-        width: "22.1%",
-        color: "#475569",
-    },
-    {
-        name: "LOADING ZONE 3 (BULK CARGO)",
-        value: 262,
-        percent: "20.4%",
-        width: "20.4%",
-        color: "#94A3B8",
-    },
-];
+type Bucket = {
+    label: string;
+    zone: Zone;
+    approved: number;
+    hold: number;
+    denied: number;
+};
 
-const incidents = [
-    {
-        id: "REQ-1050",
-        employee: "Selin Arslan",
-        resource: "CT-884120",
-        location: "Loading Zone 3",
-        reason: "Location verification failed (GPS delta 3.4km)",
-        decision: "DENIED",
-        time: "14:41",
-    },
-    {
-        id: "REQ-1049",
-        employee: "Mehmet Demir",
-        resource: "CT-554820",
-        location: "Warehouse B",
-        reason: "High-value request outside scheduled shift hours",
-        decision: "HOLD",
-        time: "14:35",
-    },
-    {
-        id: "REQ-1048",
-        employee: "David Park",
-        resource: "TK-991204",
-        location: "Port Gate 17",
-        reason: "Unregistered trailer chassis tare weight variance",
-        decision: "HOLD",
-        time: "14:28",
-    },
-    {
-        id: "REQ-1044",
-        employee: "Elena Rostova",
-        resource: "CT-110294",
-        location: "Warehouse A",
-        reason: "Expired biometric iris hash (TTL exceeded 24h)",
-        decision: "DENIED",
-        time: "14:12",
-    },
-    {
-        id: "REQ-1040",
-        employee: "Tariq Al-Mansoor",
-        resource: "RF-440219",
-        location: "Port Gate 17",
-        reason: "Tamper seal mismatch against electronic manifest",
-        decision: "HOLD",
-        time: "13:58",
-    },
-];
+type Incident = {
+    id: string;
+    employee: string;
+    resource: string;
+    zone: Zone;
+    reason: string;
+    decision: "DENIED" | "HOLD";
+    time: string;
+    daysAgo: number;
+    flag: FlagCode;
+};
 
-const timeFilters = ["Today", "Last 7 Days", "Last 30 Days", "Custom Date"];
+/** The failure categories the collected evidence can actually distinguish. */
+type FlagCode =
+    | "LOCATION"
+    | "NUMBER"
+    | "SIM_SWAP"
+    | "DEVICE_SWAP"
+    | "PERMISSION"
+    | "WINDOW";
+
+const FLAG_LABELS: Record<FlagCode, { title: string; description: string }> = {
+    LOCATION: {
+        title: "Location Mismatch",
+        description: "Device outside the authorized geofence",
+    },
+    NUMBER: {
+        title: "Number Mismatch",
+        description: "Carrier record disagreed with the enrolled number",
+    },
+    SIM_SWAP: {
+        title: "Recent SIM Swap",
+        description: "Carrier IMSI reset inside the guard window",
+    },
+    DEVICE_SWAP: {
+        title: "Recent Device Swap",
+        description: "Subscriber moved to different hardware",
+    },
+    PERMISSION: {
+        title: "Permission Denied",
+        description: "Actor lacked the permission the action requires",
+    },
+    WINDOW: {
+        title: "Out of Window",
+        description: "High-value request outside operational hours",
+    },
+};
+
+/** Reads the failure category out of the evidence, falling back to the reason. */
+function flagFor(context: DecisionContext): FlagCode {
+    const evidence = context.evidence;
+    const reason = (context.decision.reasons[0] ?? "").toLowerCase();
+
+    if (evidence?.location_verified === false) return "LOCATION";
+    if (evidence?.number_verified === false) return "NUMBER";
+    if (evidence?.recent_sim_swap === true) return "SIM_SWAP";
+    if (evidence?.recent_device_swap === true) return "DEVICE_SWAP";
+    if (reason.includes("permission")) return "PERMISSION";
+    return "WINDOW";
+}
+
+function daysBetween(iso: string): number {
+    const then = new Date(iso).getTime();
+    return Math.max(0, Math.floor((Date.now() - then) / 86_400_000));
+}
+
+/** Daily buckets per zone, oldest first, covering the last `span` days. */
+function dailyBuckets(
+    contexts: DecisionContext[],
+    zones: Zone[],
+    span: number
+): Bucket[] {
+    const rows: Bucket[] = [];
+
+    for (let day = span - 1; day >= 0; day--) {
+        const label = day === 0 ? "TODAY" : `D-${day}`;
+
+        for (const zone of zones) {
+            const matching = contexts.filter(
+                (context) =>
+                    context.transaction?.zone === zone &&
+                    daysBetween(context.decision.decided_at) === day
+            );
+
+            const counts = countByOutcome(matching);
+
+            rows.push({
+                label,
+                zone,
+                approved: counts.APPROVE,
+                hold: counts.HOLD,
+                denied: counts.DENY,
+            });
+        }
+    }
+
+    return rows;
+}
+
+/** Two-hour buckets per zone across today. */
+function hourlyBuckets(contexts: DecisionContext[], zones: Zone[]): Bucket[] {
+    const rows: Bucket[] = [];
+    const today = new Date().toISOString().slice(0, 10);
+
+    for (let slot = 0; slot < 12; slot++) {
+        const hour = slot * 2;
+        const label = `${String(hour).padStart(2, "0")}:00`;
+
+        for (const zone of zones) {
+            const matching = contexts.filter((context) => {
+                if (context.transaction?.zone !== zone) return false;
+
+                const decidedAt = context.decision.decided_at;
+                if (decidedAt.slice(0, 10) !== today) return false;
+
+                const decidedHour = new Date(decidedAt).getUTCHours();
+                return decidedHour >= hour && decidedHour < hour + 2;
+            });
+
+            const counts = countByOutcome(matching);
+
+            rows.push({
+                label,
+                zone,
+                approved: counts.APPROVE,
+                hold: counts.HOLD,
+                denied: counts.DENY,
+            });
+        }
+    }
+
+    return rows;
+}
+
+function toIncidents(contexts: DecisionContext[]): Incident[] {
+    return contexts
+        .filter((context) => effectiveOutcome(context.decision) !== "APPROVE")
+        .map((context) => {
+            const decision = context.decision;
+
+            return {
+                id: decision.decision_id,
+                employee: context.transaction?.actor_id ?? "—",
+                resource: context.transaction?.resource_id ?? "—",
+                zone: context.transaction?.zone ?? "—",
+                reason: decision.reasons[0] ?? "No reason recorded",
+                decision:
+                    effectiveOutcome(decision) === "DENY"
+                        ? ("DENIED" as const)
+                        : ("HOLD" as const),
+                time: shortTime(decision.decided_at).slice(0, 5),
+                daysAgo: daysBetween(decision.decided_at),
+                flag: flagFor(context),
+            };
+        });
+}
+
+const PERIOD_META = {
+    Today: { take: 12, cycle: "24-HOUR TRAJECTORY", tag: "1D", hourly: true },
+    "Last 7 Days": { take: 7, cycle: "7-DAY TRAJECTORY", tag: "7D", hourly: false },
+    "Last 30 Days": { take: 30, cycle: "30-DAY TRAJECTORY", tag: "30D", hourly: false },
+    "Custom Date": { take: 14, cycle: "CUSTOM WINDOW (14D)", tag: "14D", hourly: false },
+} as const;
+
+type PeriodKey = keyof typeof PERIOD_META;
+
+const timeFilters = Object.keys(PERIOD_META) as PeriodKey[];
+
+const PAGE_SIZE = 5;
+
+const nf = new Intl.NumberFormat("en-US");
+
+function pct(part: number, whole: number) {
+    if (!whole) return "0.0%";
+    return `${((part / whole) * 100).toFixed(1)}%`;
+}
 
 export default function StatisticsPage() {
-    const [timeFilter, setTimeFilter] = useState("Last 7 Days");
-    const [location, setLocation] = useState("All Locations");
-    const [incidentFilter, setIncidentFilter] = useState("ALL");
-    const [activityPeriod, setActivityPeriod] = useState<ActivityPeriod>("Weekly");
-    const [activityDate, setActivityDate] = useState("2026-09-06");
-    const [chartZoom, setChartZoom] = useState(1);
-    const [chartPan, setChartPan] = useState(0);
-    const dragStart = useRef<number | null>(null);
-    const panStart = useRef(0);
-    const activityView = getActivityView(activityPeriod, activityDate);
-    const filteredIncidents = incidents.filter((incident) => incidentFilter === "ALL" || incident.decision === incidentFilter);
+    const [timeFilter, setTimeFilter] = useState<PeriodKey>("Last 7 Days");
+    const [location, setLocation] = useState<"All Locations" | Zone>("All Locations");
+    const [page, setPage] = useState(0);
 
-    function exportCsv() {
-        const escape = (value: string | number | null) => `"${String(value ?? "").replaceAll('"', '""')}"`;
-        const rows = [
-            ["Date", "Approved", "On Hold", "Denied"],
-            ...activityView.points.map((point) => [point.day, point.approved, point.hold, point.denied]),
+    const [contexts, setContexts] = useState<DecisionContext[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        listDecisionContexts({ limit: 500 })
+            .then((loaded) => {
+                if (cancelled) return;
+                setContexts(loaded);
+                setError(null);
+            })
+            .catch((caught) => {
+                if (cancelled) return;
+                setError(
+                    caught instanceof ApiError
+                        ? caught.message
+                        : "Unexpected error loading decision analytics"
+                );
+            })
+            .finally(() => {
+                if (!cancelled) setLoading(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    const period = PERIOD_META[timeFilter];
+
+    // Only zones a decision has actually targeted appear in the breakdown.
+    const zones = useMemo(() => {
+        const found = new Set<Zone>();
+        for (const context of contexts) {
+            if (context.transaction?.zone) found.add(context.transaction.zone);
+        }
+        return [...found].sort();
+    }, [contexts]);
+
+    const source = useMemo(
+        () =>
+            period.hourly
+                ? hourlyBuckets(contexts, zones)
+                : dailyBuckets(contexts, zones, period.take),
+        [contexts, zones, period]
+    );
+
+    const incidentSource = useMemo(() => toIncidents(contexts), [contexts]);
+
+    const latency = useMemo(() => resolutionLatency(contexts), [contexts]);
+
+    const data = useMemo(() => {
+        const take = period.take;
+
+        // Keep only the most recent `take` label groups.
+        const labels = [...new Set(source.map((row) => row.label))].slice(-take);
+        const labelSet = new Set(labels);
+
+        const inPeriod = source.filter((row) => labelSet.has(row.label));
+
+        const inScope =
+            location === "All Locations"
+                ? inPeriod
+                : inPeriod.filter((row) => row.zone === location);
+
+        // Activity series, aggregated across the zones in scope.
+        const series = labels.map((label) => {
+            const rows = inScope.filter((row) => row.label === label);
+
+            return {
+                day: label,
+                approved: rows.reduce((sum, row) => sum + row.approved, 0),
+                hold: rows.reduce((sum, row) => sum + row.hold, 0),
+                denied: rows.reduce((sum, row) => sum + row.denied, 0),
+            };
+        });
+
+        const approved = inScope.reduce((sum, row) => sum + row.approved, 0);
+        const hold = inScope.reduce((sum, row) => sum + row.hold, 0);
+        const denied = inScope.reduce((sum, row) => sum + row.denied, 0);
+        const total = approved + hold + denied;
+
+        // Per-zone totals always cover every zone in the period, so the
+        // breakdown still reads as a distribution when one zone is selected.
+        const zoneTotals = zones.map((zone, index) => {
+            const rows = inPeriod.filter((row) => row.zone === zone);
+            const value = rows.reduce(
+                (sum, row) => sum + row.approved + row.hold + row.denied,
+                0
+            );
+
+            return { zone, value, label: zone, color: zoneColor(index) };
+        });
+
+        const zoneSum = zoneTotals.reduce((sum, row) => sum + row.value, 0);
+
+        const maxDays = take === 12 ? 0 : take;
+
+        const incidents = incidentSource.filter((incident) => {
+            const zoneMatch =
+                location === "All Locations" || incident.zone === location;
+
+            return zoneMatch && incident.daysAgo <= maxDays;
+        });
+
+        const flagCounts = (Object.keys(FLAG_LABELS) as FlagCode[]).map(
+            (flag) => ({
+                flag,
+                ...FLAG_LABELS[flag],
+                value: incidents.filter((incident) => incident.flag === flag).length,
+            })
+        );
+
+        return {
+            series,
+            approved,
+            hold,
+            denied,
+            total,
+            zoneTotals,
+            zoneSum,
+            incidents,
+            flagCounts,
+        };
+    }, [period, location, source, zones, incidentSource]);
+
+    const pageCount = Math.max(1, Math.ceil(data.incidents.length / PAGE_SIZE));
+    const safePage = Math.min(page, pageCount - 1);
+    const visibleIncidents = data.incidents.slice(
+        safePage * PAGE_SIZE,
+        safePage * PAGE_SIZE + PAGE_SIZE
+    );
+
+    const changeFilter = (next: PeriodKey) => {
+        setTimeFilter(next);
+        setPage(0);
+    };
+
+    const changeLocation = (next: "All Locations" | Zone) => {
+        setLocation(next);
+        setPage(0);
+    };
+
+    const exportCsv = () => {
+        const header = [
+            "period",
+            "location",
+            "bucket",
+            "approved",
+            "on_hold",
+            "denied",
         ];
-        const csv = rows.map((row) => row.map(escape).join(",")).join("\r\n");
-        const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
+
+        const rows = data.series.map((row) => [
+            timeFilter,
+            location,
+            row.day,
+            row.approved,
+            row.hold,
+            row.denied,
+        ]);
+
+        const csv = [header, ...rows]
+            .map((row) => row.join(","))
+            .join("\n");
+
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
         const url = URL.createObjectURL(blob);
+
         const link = document.createElement("a");
         link.href = url;
-        link.download = `zonegate-activity-${activityView.start}-${activityView.end}.csv`;
-        document.body.appendChild(link);
+        link.download = `zonegate-statistics-${period.tag.toLowerCase()}.csv`;
         link.click();
-        link.remove();
+
         URL.revokeObjectURL(url);
-    }
+    };
+
+    const decisionData = [
+        { name: "Approved", value: data.approved, color: "#0D9488" },
+        { name: "On Hold", value: data.hold, color: "#D97706" },
+        { name: "Denied", value: data.denied, color: "#DC2626" },
+    ];
+
+    const peakZone: { label: string } | undefined = [...data.zoneTotals].sort(
+        (a, b) => b.value - a.value
+    )[0];
 
     return (
         <div className="flex w-full flex-col gap-6">
+            {error && (
+                <div
+                    role="alert"
+                    className="rounded-lg border border-[#FECACA] bg-[#FEF2F2] px-4 py-3"
+                >
+                    <p className="text-sm font-medium text-[#B91C1C]">
+                        Authorization API unavailable
+                    </p>
+
+                    <p className="mt-1 font-mono text-[11px] text-[#DC2626]">
+                        {error}
+                    </p>
+                </div>
+            )}
+
+            {loading && !contexts.length && (
+                <p className="rounded-lg border border-[#E2E8F0] bg-white px-4 py-3 font-mono text-[11px] text-[#64748B]">
+                    Loading decision analytics…
+                </p>
+            )}
+
             <section className="flex flex-col justify-between gap-4 border-b border-[#E2E8F0] pb-4 lg:flex-row lg:items-end">
                 <div>
                     <div className="mb-1 flex items-center gap-2">
@@ -214,14 +482,16 @@ export default function StatisticsPage() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                    <div className="flex items-center rounded border border-[#E2E8F0] bg-[#F1F5F9] p-0.5">
+                    <div className="flex flex-wrap items-center rounded border border-[#E2E8F0] bg-[#F1F5F9] p-0.5">
                         {timeFilters.map((item) => (
                             <button
                                 key={item}
-                                onClick={() => setTimeFilter(item)}
-                                className={`rounded px-3 py-1.5 text-[10px] font-semibold uppercase transition ${timeFilter === item
-                                        ? "bg-[#0D9488] text-white"
-                                        : "text-[#0F172A] hover:text-[#0D9488]"
+                                type="button"
+                                onClick={() => changeFilter(item)}
+                                aria-pressed={timeFilter === item}
+                                className={`rounded px-3 py-1.5 text-[10px] font-semibold uppercase transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D9488] ${timeFilter === item
+                                    ? "bg-[#0D9488] text-white"
+                                    : "text-[#0F172A] hover:text-[#0D9488]"
                                     }`}
                             >
                                 {item}
@@ -231,17 +501,23 @@ export default function StatisticsPage() {
 
                     <select
                         value={location}
-                        onChange={(event) => setLocation(event.target.value)}
+                        onChange={(event) =>
+                            changeLocation(event.target.value as "All Locations" | Zone)
+                        }
+                        aria-label="Filter by location"
                         className="rounded border border-[#E2E8F0] bg-white px-3 py-2 font-mono text-[11px] text-[#0F172A] outline-none focus:border-[#0D9488]"
                     >
                         <option>All Locations</option>
-                        <option>Port Gate 17</option>
-                        <option>Warehouse A</option>
-                        <option>Warehouse B</option>
-                        <option>Loading Zone 3</option>
+                        {zones.map((zone) => (
+                            <option key={zone}>{zone}</option>
+                        ))}
                     </select>
 
-                    <button type="button" onClick={exportCsv} className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-white px-3 py-2 text-[10px] font-semibold uppercase text-[#0F172A] transition hover:border-[#0D9488]">
+                    <button
+                        type="button"
+                        onClick={exportCsv}
+                        className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-white px-3 py-2 text-[10px] font-semibold uppercase text-[#0F172A] transition hover:border-[#0D9488] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D9488]"
+                    >
                         <Download size={15} className="text-[#64748B]" />
                         Export CSV
                     </button>
@@ -251,35 +527,35 @@ export default function StatisticsPage() {
             <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 <SummaryCard
                     label="Total Requests"
-                    value="1,284"
-                    meta="+3.2% vs previous period"
+                    value={nf.format(data.total)}
+                    meta={`${timeFilter} · ${location}`}
                     icon={<BarChart3 size={17} />}
                 />
 
                 <SummaryCard
                     label="Approved"
-                    value="1,174"
-                    meta="91.4% gross throughput"
+                    value={nf.format(data.approved)}
+                    meta={`${pct(data.approved, data.total)} gross throughput`}
                     status="APPROVED"
                 />
 
                 <SummaryCard
                     label="On Hold"
-                    value="74"
-                    meta="5.8% pending resolution"
+                    value={nf.format(data.hold)}
+                    meta={`${pct(data.hold, data.total)} pending resolution`}
                     status="ON HOLD"
                 />
 
                 <SummaryCard
                     label="Denied"
-                    value="36"
-                    meta="2.8% security rejections"
+                    value={nf.format(data.denied)}
+                    meta={`${pct(data.denied, data.total)} security rejections`}
                     status="DENIED"
                 />
             </section>
 
-            <section className="rounded-lg border border-[#E2E8F0] bg-white p-6">
-                <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-3">
+            <section className="rounded-lg border border-[#E2E8F0] bg-white p-4 sm:p-6">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E2E8F0] pb-3">
                     <div className="flex items-center gap-2">
                         <PieChartIcon size={18} className="text-[#64748B]" />
 
@@ -289,7 +565,7 @@ export default function StatisticsPage() {
                     </div>
 
                     <span className="font-mono text-[10px] text-[#64748B]">
-                        METRIC_SET: DISPATCH_ACCURACY // N=1284
+                        METRIC_SET: DISPATCH_ACCURACY // N={data.total}
                     </span>
                 </div>
 
@@ -305,17 +581,26 @@ export default function StatisticsPage() {
                                     outerRadius={105}
                                     dataKey="value"
                                     stroke="none"
+                                    isAnimationActive={false}
                                 >
                                     {decisionData.map((entry) => (
                                         <Cell key={entry.name} fill={entry.color} />
                                     ))}
                                 </Pie>
+
+                                <Tooltip
+                                    contentStyle={{
+                                        border: "1px solid #E2E8F0",
+                                        borderRadius: "6px",
+                                        fontSize: "11px",
+                                    }}
+                                />
                             </PieChart>
                         </ResponsiveContainer>
 
                         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
                             <span className="text-3xl font-semibold text-[#0F172A]">
-                                1,284
+                                {nf.format(data.total)}
                             </span>
 
                             <span className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-[#64748B]">
@@ -323,7 +608,10 @@ export default function StatisticsPage() {
                             </span>
 
                             <span className="mt-1 font-mono text-[10px] text-[#94A3B8]">
-                                BERTH_B / 7D
+                                {location === "All Locations"
+                                    ? "BERTH_B"
+                                    : location.toUpperCase().replace(/ /g, "_")}{" "}
+                                / {period.tag}
                             </span>
                         </div>
                     </div>
@@ -332,54 +620,60 @@ export default function StatisticsPage() {
                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                             <DecisionCard
                                 label="Approved"
-                                value="1,174"
-                                meta="91.4% clearance share"
+                                value={nf.format(data.approved)}
+                                meta={`${pct(data.approved, data.total)} clearance share`}
                                 color="#0D9488"
                             />
 
                             <DecisionCard
                                 label="On Hold"
-                                value="74"
-                                meta="5.8% pending protocol"
+                                value={nf.format(data.hold)}
+                                meta={`${pct(data.hold, data.total)} pending protocol`}
                                 color="#D97706"
                             />
 
                             <DecisionCard
                                 label="Denied"
-                                value="36"
-                                meta="2.8% security lockout"
+                                value={nf.format(data.denied)}
+                                meta={`${pct(data.denied, data.total)} security lockout`}
                                 color="#DC2626"
                             />
                         </div>
 
                         <div className="rounded border border-[#E2E8F0] bg-[#F8FAFC] p-4">
-                            <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E2E8F0] pb-2">
                                 <span className="text-[10px] font-semibold uppercase text-[#0F172A]">
                                     Operational Telemetry Diagnostics
-                                </span>
-
-                                <span className="font-mono text-[10px] font-medium text-[#0D9488]">
-                                    CONFIDENCE: 99.8%
                                 </span>
                             </div>
 
                             <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-3">
                                 <Diagnostic
                                     label="Resolution Latency"
-                                    value="4.2 min avg"
-                                    meta="-0.8m vs 14d rolling"
+                                    value={
+                                        latency
+                                            ? formatWait(latency.averageMinutes)
+                                            : "—"
+                                    }
+                                    meta={
+                                        latency
+                                            ? `across ${latency.sampled} resolved ${
+                                                  latency.sampled === 1 ? "hold" : "holds"
+                                              }`
+                                            : "no hold resolved yet"
+                                    }
                                 />
 
                                 <Diagnostic
                                     label="Auto-Clearance Rate"
-                                    value="94.1%"
-                                    meta="RFID + Iris match engine"
+                                    value={pct(data.approved, data.total)}
+                                    meta="decided without a human"
                                 />
 
                                 <Diagnostic
                                     label="Manual Escalation"
-                                    value="5.9%"
-                                    meta="Officer Vance secondary"
+                                    value={pct(data.hold + data.denied, data.total)}
+                                    meta="held for authority or blocked"
                                 />
                             </div>
                         </div>
@@ -388,72 +682,28 @@ export default function StatisticsPage() {
             </section>
 
             <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-                <div className="rounded-lg border border-[#E2E8F0] bg-white p-6">
+                <div className="rounded-lg border border-[#E2E8F0] bg-white p-4 sm:p-6">
                     <div className="border-b border-[#E2E8F0] pb-3">
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
                             <span className="text-[10px] font-semibold uppercase tracking-wider text-[#0F172A]">
                                 Request Activity Over Time
                             </span>
 
                             <span className="font-mono text-[10px] text-[#64748B]">
-                                {activityPeriod.toUpperCase()}
+                                CYCLE: {period.cycle}
                             </span>
                         </div>
 
-                        <div className="mt-4 flex flex-wrap items-end gap-3">
-                            <div className="flex flex-wrap gap-1 rounded border border-[#E2E8F0] bg-[#F8FAFC] p-1" aria-label="Activity period">
-                                {(["Weekly", "Monthly", "Yearly", "Specific Day"] as const).map((period) => (
-                                    <button key={period} aria-pressed={activityPeriod === period} onClick={() => setActivityPeriod(period)}
-                                        className={`rounded px-3 py-2 text-[10px] font-semibold uppercase transition ${activityPeriod === period ? "bg-[#0D9488] text-white" : "text-[#64748B] hover:bg-[#E2E8F0]"}`}>
-                                        {period}
-                                    </button>
-                                ))}
-                            </div>
-                            <label className="flex flex-col gap-1 text-[10px] uppercase text-[#64748B]">
-                                {activityPeriod === "Weekly" ? "Week ending" : activityPeriod === "Monthly" ? "Month" : activityPeriod === "Yearly" ? "Year" : "Date"}
-                                <input
-                                    type={activityPeriod === "Yearly" ? "number" : activityPeriod === "Monthly" ? "month" : "date"}
-                                    min={activityPeriod === "Yearly" ? "2000" : "2000-01" + (activityPeriod === "Monthly" ? "" : "-01")}
-                                    max={activityPeriod === "Yearly" ? "2100" : "2100-12" + (activityPeriod === "Monthly" ? "" : "-31")}
-                                    value={activityPeriod === "Yearly" ? activityDate.slice(0, 4) : activityPeriod === "Monthly" ? activityDate.slice(0, 7) : activityDate}
-                                    onChange={(event) => {
-                                        const value = event.target.value;
-                                        if (!value || !event.target.validity.valid) return;
-                                        setActivityDate(activityPeriod === "Yearly" ? `${value}-01-01` : activityPeriod === "Monthly" ? `${value}-01` : value);
-                                    }}
-                                    className="rounded border border-[#E2E8F0] bg-white px-3 py-2 font-mono text-xs text-[#0F172A] outline-none focus:border-[#0D9488]"
-                                />
-                            </label>
-                        </div>
-                        <p aria-live="polite" className="mt-3 font-mono text-[10px] text-[#64748B]">{activityView.start} — {activityView.end}</p>
-
-                        <div className="mt-3 flex items-center justify-between gap-4 font-mono text-[10px]">
-                            <div className="flex flex-wrap gap-5">
+                        <div className="mt-3 flex gap-5 font-mono text-[10px]">
                             <LegendItem color="#0D9488" label="Approved" />
                             <LegendItem color="#D97706" label="On Hold" />
                             <LegendItem color="#DC2626" label="Denied" />
-                            </div>
-                            <div className="flex shrink-0 items-center gap-1 rounded border border-[#E2E8F0] bg-white p-1 shadow-sm">
-                                <button type="button" onClick={() => { setChartZoom((value) => Math.max(0.8, Number((value - 0.2).toFixed(1)))); setChartPan(0); }} disabled={chartZoom <= 0.8} aria-label="Zoom out" className="flex h-7 w-7 items-center justify-center rounded text-base font-semibold text-[#64748B] hover:bg-[#F1F5F9] disabled:cursor-not-allowed disabled:opacity-40">−</button>
-                                <span className="min-w-12 text-center font-mono text-[10px] text-[#64748B]">{Math.round(chartZoom * 100)}%</span>
-                                <button type="button" onClick={() => setChartZoom((value) => Math.min(1.8, Number((value + 0.2).toFixed(1))))} disabled={chartZoom >= 1.8} aria-label="Zoom in" className="flex h-7 w-7 items-center justify-center rounded text-base font-semibold text-[#64748B] hover:bg-[#F1F5F9] disabled:cursor-not-allowed disabled:opacity-40">+</button>
-                            </div>
                         </div>
                     </div>
 
-                    <div
-                        className="relative mt-4 h-64 cursor-grab overflow-hidden rounded border border-[#F1F5F9] active:cursor-grabbing"
-                        onPointerDown={(event) => { dragStart.current = event.clientX; panStart.current = chartPan; event.currentTarget.setPointerCapture(event.pointerId); }}
-                        onPointerMove={(event) => { if (dragStart.current !== null) setChartPan(panStart.current + event.clientX - dragStart.current); }}
-                        onPointerUp={() => { dragStart.current = null; }}
-                        onPointerCancel={() => { dragStart.current = null; }}
-                    >
-                        {activityView.availableDays === 0 ? (
-                            <div className="flex h-full items-center justify-center text-sm text-[#64748B]" role="status">No activity data for the selected period.</div>
-                        ) : (
-                        <div className="h-full w-full origin-center transition-transform duration-200" style={{ transform: `translateX(${chartPan}px) scale(${chartZoom})` }}>
+                    <div className="mt-4 h-64">
                         <ResponsiveContainer width="100%" height="100%">
-                            <LineChart data={activityView.points}>
+                            <LineChart data={data.series}>
                                 <CartesianGrid
                                     stroke="#E2E8F0"
                                     strokeDasharray="3 3"
@@ -462,10 +712,11 @@ export default function StatisticsPage() {
 
                                 <XAxis
                                     dataKey="day"
-                                    tickFormatter={(value: string) => value.slice(5)}
                                     tick={{ fontSize: 10, fill: "#94A3B8" }}
                                     tickLine={false}
                                     axisLine={{ stroke: "#CBD5E1" }}
+                                    interval="preserveStartEnd"
+                                    minTickGap={12}
                                 />
 
                                 <YAxis hide />
@@ -480,43 +731,41 @@ export default function StatisticsPage() {
 
                                 <Line
                                     dataKey="approved"
-                                    name="Approved"
                                     stroke="#0D9488"
                                     strokeWidth={2.5}
-                                    dot={{ r: 3, fill: "#0D9488" }}
+                                    dot={data.series.length <= 14 ? { r: 3, fill: "#0D9488" } : false}
+                                    isAnimationActive={false}
                                 />
 
                                 <Line
                                     dataKey="hold"
-                                    name="On Hold"
                                     stroke="#D97706"
                                     strokeWidth={1.5}
                                     strokeDasharray="5 4"
-                                    dot={{ r: 2 }}
+                                    dot={false}
+                                    isAnimationActive={false}
                                 />
 
                                 <Line
                                     dataKey="denied"
-                                    name="Denied"
                                     stroke="#DC2626"
                                     strokeWidth={1.5}
                                     strokeDasharray="2 4"
-                                    dot={{ r: 2 }}
+                                    dot={false}
+                                    isAnimationActive={false}
                                 />
                             </LineChart>
                         </ResponsiveContainer>
-                        </div>
-                        )}
                     </div>
 
-                    <div className="flex items-center justify-between border-t border-[#E2E8F0] pt-3 font-mono text-[10px] text-[#64748B]">
-                        <span>DEMO DATA: AUG 31 – SEP 6, 2026 · {activityView.availableDays} DAYS AVAILABLE</span>
-                        <span>GAPS = NO DATA</span>
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#E2E8F0] pt-3 font-mono text-[10px] text-[#64748B]">
+                        <span>WINDOW: {data.series.length} BUCKETS</span>
+                        <span>LATENCY: NOMINAL</span>
                     </div>
                 </div>
 
-                <div className="rounded-lg border border-[#E2E8F0] bg-white p-6">
-                    <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-3">
+                <div className="rounded-lg border border-[#E2E8F0] bg-white p-4 sm:p-6">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E2E8F0] pb-3">
                         <div className="flex items-center gap-2">
                             <Building2 size={17} className="text-[#64748B]" />
 
@@ -526,46 +775,52 @@ export default function StatisticsPage() {
                         </div>
 
                         <span className="font-mono text-[10px] text-[#64748B]">
-                            ACTIVE SECTORS: 4
+                            ACTIVE SECTORS: {zones.length}
                         </span>
                     </div>
 
                     <div className="my-6 space-y-5">
-                        {locationData.map((item) => (
-                            <div key={item.name}>
-                                <div className="mb-1 flex justify-between font-mono text-[10px] text-[#0F172A]">
-                                    <span className="font-medium">{item.name}</span>
+                        {data.zoneTotals.map((item) => {
+                            const share = pct(item.value, data.zoneSum);
+                            const isSelected = location === item.zone;
 
-                                    <span>
-                                        <strong>{item.value}</strong> req{" "}
-                                        <span className="text-[#64748B]">
-                                            ({item.percent})
+                            return (
+                                <div
+                                    key={item.zone}
+                                    className={isSelected ? "" : location === "All Locations" ? "" : "opacity-45"}
+                                >
+                                    <div className="mb-1 flex flex-wrap justify-between gap-2 font-mono text-[10px] text-[#0F172A]">
+                                        <span className="font-medium">{item.label}</span>
+
+                                        <span className="tabular-nums">
+                                            <strong>{nf.format(item.value)}</strong> req{" "}
+                                            <span className="text-[#64748B]">({share})</span>
                                         </span>
-                                    </span>
-                                </div>
+                                    </div>
 
-                                <div className="h-3 w-full overflow-hidden bg-[#F1F5F9]">
-                                    <div
-                                        className="h-full"
-                                        style={{
-                                            width: item.width,
-                                            backgroundColor: item.color,
-                                        }}
-                                    />
+                                    <div className="h-3 w-full overflow-hidden bg-[#F1F5F9]">
+                                        <div
+                                            className="h-full transition-[width] duration-300"
+                                            style={{
+                                                width: share,
+                                                backgroundColor: item.color,
+                                            }}
+                                        />
+                                    </div>
                                 </div>
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
 
-                    <div className="flex items-center justify-between border-t border-[#E2E8F0] pt-3 font-mono text-[10px] text-[#64748B]">
-                        <span>PRIMARY LOAD: PORT GATE 17 CONTINUOUS</span>
-                        <span>AGGREGATE: 1,284 UNITS</span>
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#E2E8F0] pt-3 font-mono text-[10px] text-[#64748B]">
+                        <span>PRIMARY LOAD: {peakZone?.label ?? "—"}</span>
+                        <span>AGGREGATE: {nf.format(data.zoneSum)} UNITS</span>
                     </div>
                 </div>
             </section>
 
             <section>
-                <div className="mb-3 flex items-center justify-between">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                         <ShieldAlert size={18} className="text-[#64748B]" />
 
@@ -575,59 +830,44 @@ export default function StatisticsPage() {
                     </div>
 
                     <span className="font-mono text-[10px] text-[#64748B]">
-                        FLAGGED_EXCEPTIONS // CURRENT PERIOD
+                        FLAGGED_EXCEPTIONS // {timeFilter.toUpperCase()}
                     </span>
                 </div>
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                    <SecurityCard
-                        title="Location Mismatch"
-                        value="18"
-                        description="GPS triangulation delta > 250m"
-                        critical
-                    />
-
-                    <SecurityCard
-                        title="Device Mismatch"
-                        value="7"
-                        description="Unbound hardware IMEI / Key"
-                        icon={<Smartphone size={18} />}
-                    />
-
-                    <SecurityCard
-                        title="Recent SIM Swap"
-                        value="5"
-                        description="Carrier IMSI reset within 48h"
-                        icon={<Smartphone size={18} />}
-                    />
-
-                    <SecurityCard
-                        title="Replay Attempt"
-                        value="2"
-                        description="Stale NFC nonce sequence"
-                        icon={<History size={18} />}
-                    />
+                    {data.flagCounts.map((flag) => (
+                        <SecurityCard
+                            key={flag.flag}
+                            title={flag.title}
+                            value={String(flag.value)}
+                            description={flag.description}
+                            critical={flag.flag === "LOCATION" && flag.value > 0}
+                            icon={
+                                flag.flag === "PERMISSION" ||
+                                flag.flag === "WINDOW" ? (
+                                    <History size={18} />
+                                ) : (
+                                    <Smartphone size={18} />
+                                )
+                            }
+                        />
+                    ))}
                 </div>
             </section>
 
             <section className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
-                <div className="flex items-center justify-between border-b border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3">
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-[#0F172A]">
                         Recent Denied & Hold Incidents
                     </span>
 
-                    <label className="flex items-center gap-2 font-mono text-[10px] text-[#64748B]">
-                        FILTER:
-                        <select value={incidentFilter} onChange={(event) => setIncidentFilter(event.target.value)} aria-label="Incident decision filter" className="cursor-pointer rounded border border-[#E2E8F0] bg-white px-2 py-1 font-mono text-[10px] text-[#0F172A] outline-none focus:border-[#0D9488]">
-                            <option value="ALL">ALL NON-APPROVED</option>
-                            <option value="HOLD">HOLD ONLY</option>
-                            <option value="DENIED">DENIED ONLY</option>
-                        </select>
-                    </label>
+                    <span className="font-mono text-[10px] text-[#64748B]">
+                        FILTER: NON-APPROVED ONLY
+                    </span>
                 </div>
 
                 <div className="overflow-x-auto">
-                    <table className="w-full min-w-[1000px] border-collapse text-left">
+                    <table className="w-full min-w-[860px] border-collapse text-left">
                         <thead>
                             <tr className="border-b border-[#E2E8F0] bg-[#F1F5F9]">
                                 {[
@@ -650,9 +890,7 @@ export default function StatisticsPage() {
                         </thead>
 
                         <tbody className="divide-y divide-[#E2E8F0]">
-                            {filteredIncidents.length === 0 ? (
-                                <tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-[#64748B]">No incidents match this filter.</td></tr>
-                            ) : filteredIncidents.map((incident) => (
+                            {visibleIncidents.map((incident) => (
                                 <tr
                                     key={incident.id}
                                     className="transition hover:bg-[#0D9488]/5"
@@ -670,7 +908,7 @@ export default function StatisticsPage() {
                                     </td>
 
                                     <td className="px-4 py-3 text-xs">
-                                        {incident.location}
+                                        {incident.zone}
                                     </td>
 
                                     <td className="px-4 py-3 text-xs text-[#64748B]">
@@ -686,28 +924,50 @@ export default function StatisticsPage() {
                                     </td>
                                 </tr>
                             ))}
+
+                            {visibleIncidents.length === 0 && (
+                                <tr>
+                                    <td
+                                        colSpan={7}
+                                        className="px-4 py-10 text-center text-xs text-[#64748B]"
+                                    >
+                                        No non-approved incidents recorded for {timeFilter} at{" "}
+                                        {location}.
+                                    </td>
+                                </tr>
+                            )}
                         </tbody>
                     </table>
                 </div>
 
-                <div className="flex items-center justify-between border-t border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3">
                     <span className="font-mono text-[10px] text-[#64748B]">
-                        Showing {filteredIncidents.length} of 110 filtered incidents
+                        Showing {visibleIncidents.length} of {data.incidents.length} filtered
+                        incidents
                     </span>
 
                     <div className="flex items-center gap-2">
                         <button
-                            disabled
-                            className="rounded border border-[#E2E8F0] bg-white px-3 py-1 font-mono text-[10px] text-[#64748B] disabled:opacity-40"
+                            type="button"
+                            onClick={() => setPage((current) => Math.max(0, current - 1))}
+                            disabled={safePage === 0}
+                            className="rounded border border-[#E2E8F0] bg-white px-3 py-1 font-mono text-[10px] text-[#64748B] transition hover:border-[#0D9488] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[#E2E8F0]"
                         >
                             PREV
                         </button>
 
-                        <span className="font-mono text-[10px]">
-                            1 / 22
+                        <span className="font-mono text-[10px] tabular-nums">
+                            {safePage + 1} / {pageCount}
                         </span>
 
-                        <button className="rounded border border-[#E2E8F0] bg-white px-3 py-1 font-mono text-[10px] text-[#64748B] hover:border-[#0D9488]">
+                        <button
+                            type="button"
+                            onClick={() =>
+                                setPage((current) => Math.min(pageCount - 1, current + 1))
+                            }
+                            disabled={safePage >= pageCount - 1}
+                            className="rounded border border-[#E2E8F0] bg-white px-3 py-1 font-mono text-[10px] text-[#64748B] transition hover:border-[#0D9488] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[#E2E8F0]"
+                        >
                             NEXT
                         </button>
                     </div>
@@ -732,7 +992,7 @@ function SummaryCard({
 }) {
     return (
         <div className="rounded-lg border border-[#E2E8F0] bg-white p-4">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2">
                 <span className="text-[10px] font-semibold uppercase tracking-wider text-[#64748B]">
                     {label}
                 </span>
@@ -741,7 +1001,7 @@ function SummaryCard({
             </div>
 
             <div className="mt-4">
-                <p className="text-2xl font-semibold text-[#0F172A]">
+                <p className="text-2xl font-semibold tabular-nums text-[#0F172A]">
                     {value}
                 </p>
 
@@ -777,7 +1037,7 @@ function DecisionCard({
                 </span>
             </div>
 
-            <p className="mt-2 text-xl font-semibold">{value}</p>
+            <p className="mt-2 text-xl font-semibold tabular-nums">{value}</p>
 
             <p className="mt-1 font-mono text-[10px] text-[#64748B]">
                 {meta}
@@ -801,7 +1061,7 @@ function Diagnostic({
                 {label}
             </span>
 
-            <span className="font-mono text-xs font-semibold text-[#0F172A]">
+            <span className="font-mono text-xs font-semibold tabular-nums text-[#0F172A]">
                 {value}
             </span>
 
@@ -844,13 +1104,13 @@ function SecurityCard({
     critical?: boolean;
 }) {
     return (
-        <div className="flex items-start justify-between rounded-lg border border-[#E2E8F0] bg-white p-4">
+        <div className="flex items-start justify-between gap-3 rounded-lg border border-[#E2E8F0] bg-white p-4">
             <div>
                 <p className="text-[10px] font-semibold uppercase text-[#64748B]">
                     {title}
                 </p>
 
-                <p className="mt-1 text-xl font-semibold">{value}</p>
+                <p className="mt-1 text-xl font-semibold tabular-nums">{value}</p>
 
                 <p className="mt-1 font-mono text-[10px] text-[#64748B]">
                     {description}
@@ -858,11 +1118,11 @@ function SecurityCard({
             </div>
 
             {critical ? (
-                <span className="rounded border border-[#FECACA] bg-[#FEF2F2] px-2 py-1 text-[9px] font-semibold text-[#DC2626]">
+                <span className="shrink-0 rounded border border-[#FECACA] bg-[#FEF2F2] px-2 py-1 text-[9px] font-semibold text-[#DC2626]">
                     CRITICAL
                 </span>
             ) : (
-                <span className="text-[#64748B]">
+                <span className="shrink-0 text-[#64748B]">
                     {icon}
                 </span>
             )}
@@ -886,7 +1146,7 @@ function IncidentBadge({
             : "#0D9488";
 
     return (
-        <span className="inline-flex items-center gap-1.5 rounded border border-[#E2E8F0] bg-white px-2 py-1 text-[9px] font-semibold uppercase text-[#0F172A]">
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded border border-[#E2E8F0] bg-white px-2 py-1 text-[9px] font-semibold uppercase text-[#0F172A]">
             <span
                 className="h-1.5 w-1.5 rounded-full"
                 style={{ backgroundColor: dot }}
