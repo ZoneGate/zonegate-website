@@ -216,6 +216,23 @@ export default function EmployeesPage() {
 
     const selectedPerson = personnel.find((person) => person.id === selectedId);
 
+    function batchRevoke() {
+        if (!filteredPersonnel.length) {
+            setActionMessage("No personnel match the current filters.");
+            return;
+        }
+        const confirmed = window.confirm(`Revoke access for ${filteredPersonnel.length} filtered personnel?`);
+        if (!confirmed) return;
+        setActionMessage(`Access revoked for ${filteredPersonnel.length} filtered personnel.`);
+    }
+
+    function issueAccessPass() {
+        const name = window.prompt("Enter the person's full name:");
+        if (!name?.trim()) return;
+        const id = `ZG-${Math.floor(10000 + Math.random() * 90000)}`;
+        setActionMessage(`Access pass ${id} issued for ${name.trim()}.`);
+    }
+
     function exportLedger() {
         const escape = (value: string) => `"${value.replaceAll('"', '""')}"`;
         const rows = [
@@ -259,17 +276,18 @@ export default function EmployeesPage() {
                     </div>
 
                     <div className="flex items-center gap-2.5">
-                        <button className="flex items-center gap-1.5 rounded border border-[#E2E8F0] bg-white px-4 py-2 text-xs font-semibold uppercase tracking-wider text-[#0F172A] transition hover:bg-[#F1F5F9]">
+                        <button type="button" onClick={batchRevoke} className="flex items-center gap-1.5 rounded border border-[#E2E8F0] bg-white px-4 py-2 text-xs font-semibold uppercase tracking-wider text-[#0F172A] transition hover:bg-[#F1F5F9]">
                             <Ban size={16} className="text-[#64748B]" />
                             Batch Revoke
                         </button>
 
-                        <button className="flex items-center gap-1.5 rounded bg-[#0D9488] px-4 py-2 text-xs font-semibold uppercase tracking-wider text-white transition hover:bg-[#0F766E]">
+                        <button type="button" onClick={issueAccessPass} className="flex items-center gap-1.5 rounded bg-[#0D9488] px-4 py-2 text-xs font-semibold uppercase tracking-wider text-white transition hover:bg-[#0F766E]">
                             <BadgeCheck size={16} />
                             Issue Access Pass
                         </button>
                     </div>
                 </div>
+                {actionMessage && <p role="status" className="text-xs text-[#0F766E]">{actionMessage}</p>}
 
                 <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
                     <MetricCard
