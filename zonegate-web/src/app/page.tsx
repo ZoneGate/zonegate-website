@@ -359,7 +359,7 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+      <section className="grid grid-cols-1 gap-4">
         <div className="rounded-lg border border-[#E2E8F0] bg-white xl:col-span-2">
           <div className="border-b border-[#F1F5F9] px-4 py-3">
             <p className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">

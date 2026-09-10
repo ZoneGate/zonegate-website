@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
@@ -88,13 +89,50 @@ export default function Sidebar({
           }`}
       >
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="flex h-16 items-center gap-2 border-b border-[#1E293B] px-4">
-            <div className="flex h-8 w-8 items-center justify-center rounded bg-[#0D9488] font-bold">
-              Z
-            </div>
-            <span className="text-sm font-semibold uppercase tracking-wider">
-              ZoneGate
-            </span>
+          {/* Strips the white JPEG ground off the logo so it sits on the dark rail. */}
+          <svg
+            width="0"
+            height="0"
+            className="absolute"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <defs>
+              <filter
+                id="zonegate-remove-white"
+                x="0%"
+                y="0%"
+                width="100%"
+                height="100%"
+                colorInterpolationFilters="sRGB"
+              >
+                <feColorMatrix
+                  type="matrix"
+                  values="0 0 0 0 0.0784  0 0 0 0 0.3294  0 0 0 0 0.3922  -0.2976 -1.0013 -0.1011 0 1.36"
+                />
+                <feComposite in2="SourceGraphic" operator="in" />
+              </filter>
+            </defs>
+          </svg>
+
+          <div className="flex h-28 items-center gap-2 border-b border-[#1E293B] px-4">
+            <Link
+              href="/"
+              aria-label="ZoneGate home"
+              onClick={onClose}
+              className="isolate flex flex-1 items-center justify-center rounded py-3 transition-colors hover:bg-[#152035] focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-[#1FD1A8]"
+            >
+              <Image
+                src="/zonegate-logo.jpeg"
+                alt="ZoneGate"
+                width={960}
+                height={1096}
+                sizes="77px"
+                priority
+                className="h-[88px] w-auto object-contain"
+                style={{ filter: "url(#zonegate-remove-white)" }}
+              />
+            </Link>
 
             <button
               type="button"

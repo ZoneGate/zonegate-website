@@ -177,7 +177,6 @@ export default function EmployeesPage() {
                         and an active device binding.
                     </p>
                 </div>
-
                 <button
                     type="button"
                     onClick={reload}
