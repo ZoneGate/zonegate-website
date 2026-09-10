@@ -9,7 +9,13 @@ import {
     ShieldAlert,
     Smartphone,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import {
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+    useSyncExternalStore,
+} from "react";
 
 import {
     ApiError,
@@ -220,6 +226,113 @@ function toIncidents(contexts: DecisionContext[]): Incident[] {
         });
 }
 
+/* ------------------------------------------------------------------ *
+ * The activity chart has its own window, independent of the page-wide
+ * period filter: an anchor date plus a span around it. The counts are
+ * still projected from the decision log, so an empty stretch of calendar
+ * reads as zero rather than being dropped.
+ * ------------------------------------------------------------------ */
+
+type ActivityPeriod = "Weekly" | "Monthly" | "Yearly" | "Specific Day";
+
+const ACTIVITY_PERIODS: ActivityPeriod[] = [
+    "Weekly",
+    "Monthly",
+    "Yearly",
+    "Specific Day",
+];
+
+const isoDay = (value: Date) => value.toISOString().slice(0, 10);
+
+function activityWindow(period: ActivityPeriod, date: string) {
+    const anchor = new Date(`${date}T00:00:00Z`);
+    const start = new Date(anchor);
+    const end = new Date(anchor);
+
+    if (period === "Weekly") start.setUTCDate(start.getUTCDate() - 6);
+
+    if (period === "Monthly") {
+        start.setUTCDate(1);
+        end.setUTCMonth(end.getUTCMonth() + 1, 0);
+    }
+
+    if (period === "Yearly") {
+        start.setUTCMonth(0, 1);
+        end.setUTCMonth(11, 31);
+    }
+
+    return { start, end };
+}
+
+const EMPTY_ACTIVITY = { points: [], start: "", end: "", available: 0 };
+
+const noopSubscribe = () => () => {};
+
+/**
+ * Today's date, empty on the server. This route is prerendered, so a date
+ * baked into the HTML would be the build's day, not the reader's; the server
+ * snapshot stays empty and the browser fills it in on hydration.
+ */
+function useToday() {
+    return useSyncExternalStore(
+        noopSubscribe,
+        () => isoDay(new Date()),
+        () => ""
+    );
+}
+
+function buildActivityView(
+    contexts: DecisionContext[],
+    zone: "All Locations" | Zone,
+    period: ActivityPeriod,
+    date: string
+) {
+    if (!date) return EMPTY_ACTIVITY;
+
+    const { start, end } = activityWindow(period, date);
+    const from = isoDay(start);
+    const to = isoDay(end);
+
+    const inScope = contexts.filter((context) => {
+        if (zone !== "All Locations" && context.transaction?.zone !== zone) {
+            return false;
+        }
+
+        const day = context.decision.decided_at.slice(0, 10);
+        return day >= from && day <= to;
+    });
+
+    // Yearly rolls up to months; everything else stays per day.
+    const byMonth = period === "Yearly";
+    const keyOf = (iso: string) => (byMonth ? iso.slice(0, 7) : iso.slice(0, 10));
+
+    const totals = new Map<string, DecisionContext[]>();
+    for (const context of inScope) {
+        const key = keyOf(context.decision.decided_at);
+        const bucket = totals.get(key);
+        if (bucket) bucket.push(context);
+        else totals.set(key, [context]);
+    }
+
+    const points = [];
+    for (const cursor = new Date(start); cursor <= end; ) {
+        const key = keyOf(isoDay(cursor));
+        const counts = countByOutcome(totals.get(key) ?? []);
+
+        points.push({
+            day: byMonth ? key : key.slice(5),
+            approved: counts.APPROVE,
+            hold: counts.HOLD,
+            denied: counts.DENY,
+        });
+
+        if (byMonth) cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+        else cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+
+    return { points, start: from, end: to, available: inScope.length };
+}
+
 const PERIOD_META = {
     Today: { take: 12, cycle: "24-HOUR TRAJECTORY", tag: "1D", hourly: true },
     "Last 7 Days": { take: 7, cycle: "7-DAY TRAJECTORY", tag: "7D", hourly: false },
@@ -245,9 +358,25 @@ export default function StatisticsPage() {
     const [location, setLocation] = useState<"All Locations" | Zone>("All Locations");
     const [page, setPage] = useState(0);
 
+    // The table only ever holds non-approved decisions; this narrows it further.
+    const [outcome, setOutcome] = useState<"ALL" | "DENIED" | "HOLD">("ALL");
+
     const [contexts, setContexts] = useState<DecisionContext[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+
+    const [activityPeriod, setActivityPeriod] = useState<ActivityPeriod>("Weekly");
+
+    // The chart is anchored on today until the reader picks another date.
+    const today = useToday();
+    const [pickedDate, setPickedDate] = useState<string | null>(null);
+    const activityDate = pickedDate ?? today;
+    const setActivityDate = setPickedDate;
+
+    const [chartZoom, setChartZoom] = useState(1);
+    const [chartPan, setChartPan] = useState(0);
+    const dragStart = useRef<number | null>(null);
+    const panStart = useRef(0);
 
     useEffect(() => {
         let cancelled = false;
@@ -292,6 +421,11 @@ export default function StatisticsPage() {
                 ? hourlyBuckets(contexts, zones)
                 : dailyBuckets(contexts, zones, period.take),
         [contexts, zones, period]
+    );
+
+    const activity = useMemo(
+        () => buildActivityView(contexts, location, activityPeriod, activityDate),
+        [contexts, location, activityPeriod, activityDate]
     );
 
     const incidentSource = useMemo(() => toIncidents(contexts), [contexts]);
@@ -373,12 +507,28 @@ export default function StatisticsPage() {
         };
     }, [period, location, source, zones, incidentSource]);
 
-    const pageCount = Math.max(1, Math.ceil(data.incidents.length / PAGE_SIZE));
+    const deniedCount = data.incidents.filter(
+        (incident) => incident.decision === "DENIED"
+    ).length;
+
+    const holdCount = data.incidents.length - deniedCount;
+
+    const filteredIncidents =
+        outcome === "ALL"
+            ? data.incidents
+            : data.incidents.filter((incident) => incident.decision === outcome);
+
+    const pageCount = Math.max(1, Math.ceil(filteredIncidents.length / PAGE_SIZE));
     const safePage = Math.min(page, pageCount - 1);
-    const visibleIncidents = data.incidents.slice(
+    const visibleIncidents = filteredIncidents.slice(
         safePage * PAGE_SIZE,
         safePage * PAGE_SIZE + PAGE_SIZE
     );
+
+    const changeOutcome = (next: "ALL" | "DENIED" | "HOLD") => {
+        setOutcome(next);
+        setPage(0);
+    };
 
     const changeFilter = (next: PeriodKey) => {
         setTimeFilter(next);
@@ -690,20 +840,163 @@ export default function StatisticsPage() {
                             </span>
 
                             <span className="font-mono text-[10px] text-[#64748B]">
-                                CYCLE: {period.cycle}
+                                {activityPeriod.toUpperCase()}
                             </span>
                         </div>
 
-                        <div className="mt-3 flex gap-5 font-mono text-[10px]">
-                            <LegendItem color="#0D9488" label="Approved" />
-                            <LegendItem color="#D97706" label="On Hold" />
-                            <LegendItem color="#DC2626" label="Denied" />
+                        <div className="mt-4 flex flex-wrap items-end gap-3">
+                            <div
+                                role="group"
+                                aria-label="Activity period"
+                                className="flex flex-wrap gap-1 rounded border border-[#E2E8F0] bg-[#F8FAFC] p-1"
+                            >
+                                {ACTIVITY_PERIODS.map((item) => (
+                                    <button
+                                        key={item}
+                                        type="button"
+                                        aria-pressed={activityPeriod === item}
+                                        onClick={() => {
+                                            setActivityPeriod(item);
+                                            setChartPan(0);
+                                        }}
+                                        className={`rounded px-3 py-2 text-[10px] font-semibold uppercase transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D9488] ${activityPeriod === item
+                                            ? "bg-[#0D9488] text-white"
+                                            : "text-[#64748B] hover:bg-[#E2E8F0]"
+                                            }`}
+                                    >
+                                        {item}
+                                    </button>
+                                ))}
+                            </div>
+
+                            <label className="flex flex-col gap-1 text-[10px] uppercase text-[#64748B]">
+                                {activityPeriod === "Weekly"
+                                    ? "Week ending"
+                                    : activityPeriod === "Monthly"
+                                        ? "Month"
+                                        : activityPeriod === "Yearly"
+                                            ? "Year"
+                                            : "Date"}
+
+                                <input
+                                    type={
+                                        activityPeriod === "Yearly"
+                                            ? "number"
+                                            : activityPeriod === "Monthly"
+                                                ? "month"
+                                                : "date"
+                                    }
+                                    min={activityPeriod === "Yearly" ? "2000" : undefined}
+                                    max={activityPeriod === "Yearly" ? "2100" : undefined}
+                                    value={
+                                        activityPeriod === "Yearly"
+                                            ? activityDate.slice(0, 4)
+                                            : activityPeriod === "Monthly"
+                                                ? activityDate.slice(0, 7)
+                                                : activityDate
+                                    }
+                                    onChange={(event) => {
+                                        const value = event.target.value;
+                                        if (!value || !event.target.validity.valid) return;
+
+                                        setActivityDate(
+                                            activityPeriod === "Yearly"
+                                                ? `${value}-01-01`
+                                                : activityPeriod === "Monthly"
+                                                    ? `${value}-01`
+                                                    : value
+                                        );
+                                        setChartPan(0);
+                                    }}
+                                    className="rounded border border-[#E2E8F0] bg-white px-3 py-2 font-mono text-xs text-[#0F172A] outline-none focus:border-[#0D9488]"
+                                />
+                            </label>
+                        </div>
+
+                        <p aria-live="polite" className="mt-3 font-mono text-[10px] text-[#64748B]">
+                            {activity.start && activity.end
+                                ? `${activity.start} — ${activity.end}`
+                                : "—"}
+                        </p>
+
+                        <div className="mt-3 flex items-center justify-between gap-4 font-mono text-[10px]">
+                            <div className="flex flex-wrap gap-5">
+                                <LegendItem color="#0D9488" label="Approved" />
+                                <LegendItem color="#D97706" label="On Hold" />
+                                <LegendItem color="#DC2626" label="Denied" />
+                            </div>
+
+                            <div className="flex shrink-0 items-center gap-1 rounded border border-[#E2E8F0] bg-white p-1 shadow-sm">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setChartZoom((value) =>
+                                            Math.max(0.8, Number((value - 0.2).toFixed(1)))
+                                        );
+                                        setChartPan(0);
+                                    }}
+                                    disabled={chartZoom <= 0.8}
+                                    aria-label="Zoom out"
+                                    className="flex h-7 w-7 items-center justify-center rounded text-base font-semibold text-[#64748B] transition hover:bg-[#F1F5F9] disabled:cursor-not-allowed disabled:opacity-40"
+                                >
+                                    −
+                                </button>
+
+                                <span className="min-w-12 text-center font-mono text-[10px] text-[#64748B]">
+                                    {Math.round(chartZoom * 100)}%
+                                </span>
+
+                                <button
+                                    type="button"
+                                    onClick={() =>
+                                        setChartZoom((value) =>
+                                            Math.min(1.8, Number((value + 0.2).toFixed(1)))
+                                        )
+                                    }
+                                    disabled={chartZoom >= 1.8}
+                                    aria-label="Zoom in"
+                                    className="flex h-7 w-7 items-center justify-center rounded text-base font-semibold text-[#64748B] transition hover:bg-[#F1F5F9] disabled:cursor-not-allowed disabled:opacity-40"
+                                >
+                                    +
+                                </button>
+                            </div>
                         </div>
                     </div>
 
-                    <div className="mt-4 h-64">
+                    <div
+                        className="relative mt-4 h-64 cursor-grab overflow-hidden rounded border border-[#F1F5F9] active:cursor-grabbing"
+                        onPointerDown={(event) => {
+                            dragStart.current = event.clientX;
+                            panStart.current = chartPan;
+                            event.currentTarget.setPointerCapture(event.pointerId);
+                        }}
+                        onPointerMove={(event) => {
+                            if (dragStart.current === null) return;
+                            setChartPan(panStart.current + event.clientX - dragStart.current);
+                        }}
+                        onPointerUp={() => {
+                            dragStart.current = null;
+                        }}
+                        onPointerCancel={() => {
+                            dragStart.current = null;
+                        }}
+                    >
+                        {activity.available === 0 ? (
+                            <div
+                                role="status"
+                                className="flex h-full items-center justify-center px-4 text-center text-sm text-[#64748B]"
+                            >
+                                {loading
+                                    ? "Loading the decision log…"
+                                    : "No decisions recorded for the selected period."}
+                            </div>
+                        ) : (
+                        <div
+                            className="h-full w-full origin-center transition-transform duration-200"
+                            style={{ transform: `translateX(${chartPan}px) scale(${chartZoom})` }}
+                        >
                         <ResponsiveContainer width="100%" height="100%">
-                            <LineChart data={data.series}>
+                            <LineChart data={activity.points}>
                                 <CartesianGrid
                                     stroke="#E2E8F0"
                                     strokeDasharray="3 3"
@@ -733,7 +1026,7 @@ export default function StatisticsPage() {
                                     dataKey="approved"
                                     stroke="#0D9488"
                                     strokeWidth={2.5}
-                                    dot={data.series.length <= 14 ? { r: 3, fill: "#0D9488" } : false}
+                                    dot={activity.points.length <= 14 ? { r: 3, fill: "#0D9488" } : false}
                                     isAnimationActive={false}
                                 />
 
@@ -756,10 +1049,12 @@ export default function StatisticsPage() {
                                 />
                             </LineChart>
                         </ResponsiveContainer>
+                        </div>
+                        )}
                     </div>
 
                     <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#E2E8F0] pt-3 font-mono text-[10px] text-[#64748B]">
-                        <span>WINDOW: {data.series.length} BUCKETS</span>
+                        <span>WINDOW: {activity.points.length} BUCKETS</span>
                         <span>LATENCY: NOMINAL</span>
                     </div>
                 </div>
@@ -861,9 +1156,32 @@ export default function StatisticsPage() {
                         Recent Denied & Hold Incidents
                     </span>
 
-                    <span className="font-mono text-[10px] text-[#64748B]">
-                        FILTER: NON-APPROVED ONLY
-                    </span>
+                    <div
+                        role="group"
+                        aria-label="Filter incidents by decision"
+                        className="flex flex-wrap gap-1 rounded border border-[#E2E8F0] bg-white p-1"
+                    >
+                        {(
+                            [
+                                ["ALL", `All (${data.incidents.length})`],
+                                ["DENIED", `Denied (${deniedCount})`],
+                                ["HOLD", `On Hold (${holdCount})`],
+                            ] as const
+                        ).map(([key, label]) => (
+                            <button
+                                key={key}
+                                type="button"
+                                aria-pressed={outcome === key}
+                                onClick={() => changeOutcome(key)}
+                                className={`rounded px-3 py-1.5 font-mono text-[10px] font-semibold uppercase transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D9488] ${outcome === key
+                                    ? "bg-[#0F172A] text-white"
+                                    : "text-[#64748B] hover:bg-[#F1F5F9]"
+                                    }`}
+                            >
+                                {label}
+                            </button>
+                        ))}
+                    </div>
                 </div>
 
                 <div className="overflow-x-auto">
@@ -931,8 +1249,12 @@ export default function StatisticsPage() {
                                         colSpan={7}
                                         className="px-4 py-10 text-center text-xs text-[#64748B]"
                                     >
-                                        No non-approved incidents recorded for {timeFilter} at{" "}
-                                        {location}.
+                                        {outcome === "ALL"
+                                            ? "No non-approved incidents"
+                                            : outcome === "DENIED"
+                                                ? "No denied incidents"
+                                                : "No incidents on hold"}{" "}
+                                        recorded for {timeFilter} at {location}.
                                     </td>
                                 </tr>
                             )}
@@ -942,7 +1264,7 @@ export default function StatisticsPage() {
 
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3">
                     <span className="font-mono text-[10px] text-[#64748B]">
-                        Showing {visibleIncidents.length} of {data.incidents.length} filtered
+                        Showing {visibleIncidents.length} of {filteredIncidents.length} filtered
                         incidents
                     </span>
 
