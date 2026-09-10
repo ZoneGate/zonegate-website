@@ -66,6 +66,18 @@ export type EvidencePlan = {
     optional: string[];
     combined: string[];
     rationale: string[];
+    /**
+     * How the plan was reached. The agent is only ever offered the optional
+     * set, so anything mandatory in `combined` is the validator enforcing
+     * policy rather than the agent having asked for it.
+     *
+     * Decisions recorded before this was traced come back with the defaults,
+     * which is why `offered_optional` being empty means "not recorded" rather
+     * than "the agent was offered nothing".
+     */
+    planner_consulted: boolean;
+    offered_optional: string[];
+    proposed_optional: string[];
 };
 
 export type Receipt = {

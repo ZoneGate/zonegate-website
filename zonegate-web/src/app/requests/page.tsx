@@ -619,6 +619,76 @@ function RecordDetail({
                     )}
                 </Panel>
 
+                <Panel title="Evidence Plan" wide>
+                    {context.evidence_plan &&
+                    context.evidence_plan.offered_optional.length > 0 ? (
+                        <>
+                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                                <PlanColumn
+                                    label="Required by policy"
+                                    caption="Enforced for every request. The agent is never asked."
+                                    kinds={context.evidence_plan.mandatory}
+                                    tone="enforced"
+                                />
+
+                                <PlanColumn
+                                    label="Offered to the agent"
+                                    caption="The only kinds it is permitted to choose from."
+                                    kinds={context.evidence_plan.offered_optional}
+                                    tone="offered"
+                                />
+
+                                <PlanColumn
+                                    label="Agent asked for"
+                                    caption={
+                                        context.evidence_plan.planner_consulted
+                                            ? "Its selection, before validation."
+                                            : "No plan was returned."
+                                    }
+                                    kinds={context.evidence_plan.proposed_optional}
+                                    tone="proposed"
+                                    empty={
+                                        context.evidence_plan.planner_consulted
+                                            ? "nothing extra"
+                                            : "planner not consulted"
+                                    }
+                                />
+                            </div>
+
+                            <div className="mt-4 rounded-md border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-2.5">
+                                <p className="font-mono text-[10px] leading-relaxed text-[#0F172A]">
+                                    VALIDATOR &rarr;{" "}
+                                    {context.evidence_plan.mandatory.length} mandatory
+                                    enforced, {context.evidence_plan.optional.length}{" "}
+                                    optional accepted, 0 rejected
+                                </p>
+
+                                <p className="mt-1 font-mono text-[10px] leading-relaxed text-[#64748B]">
+                                    COLLECTED &rarr;{" "}
+                                    {context.evidence_plan.combined.join(", ") || "none"}
+                                </p>
+                            </div>
+
+                            {context.evidence_plan.rationale.length > 0 && (
+                                <p className="mt-3 text-xs italic leading-relaxed text-[#64748B]">
+                                    &ldquo;{context.evidence_plan.rationale[0]}&rdquo;
+                                </p>
+                            )}
+
+                            <p className="mt-3 text-[11px] leading-relaxed text-[#94A3B8]">
+                                A plan that proposes a forbidden kind is refused
+                                outright and the request is denied; it is never
+                                silently dropped.
+                            </p>
+                        </>
+                    ) : (
+                        <p className="text-sm text-[#64748B]">
+                            This decision predates evidence-plan tracing, so how the
+                            plan was reached was not recorded.
+                        </p>
+                    )}
+                </Panel>
+
                 <Panel title="Network Evidence">
                     {evidence ? (
                         <>
@@ -741,15 +811,71 @@ function RecordDetail({
     );
 }
 
+function PlanColumn({
+    label,
+    caption,
+    kinds,
+    tone,
+    empty = "none",
+}: {
+    label: string;
+    caption: string;
+    kinds: string[];
+    tone: "enforced" | "offered" | "proposed";
+    empty?: string;
+}) {
+    const chip =
+        tone === "enforced"
+            ? "border-[#0D9488] bg-[#F0FDFA] text-[#0F766E]"
+            : tone === "proposed"
+              ? "border-[#C7D2FE] bg-[#EEF2FF] text-[#4338CA]"
+              : "border-[#E2E8F0] bg-white text-[#64748B]";
+
+    return (
+        <div>
+            <p className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
+                {label}
+            </p>
+
+            <div className="mt-2 flex flex-wrap gap-1.5">
+                {kinds.length > 0 ? (
+                    kinds.map((kind) => (
+                        <span
+                            key={kind}
+                            className={`rounded border px-1.5 py-0.5 font-mono text-[10px] ${chip}`}
+                        >
+                            {kind}
+                        </span>
+                    ))
+                ) : (
+                    <span className="font-mono text-[10px] text-[#94A3B8]">
+                        {empty}
+                    </span>
+                )}
+            </div>
+
+            <p className="mt-2 text-[11px] leading-relaxed text-[#94A3B8]">
+                {caption}
+            </p>
+        </div>
+    );
+}
+
 function Panel({
     title,
     children,
+    wide,
 }: {
     title: string;
     children: React.ReactNode;
+    wide?: boolean;
 }) {
     return (
-        <div className="rounded-lg border border-[#E2E8F0] bg-white">
+        <div
+            className={`rounded-lg border border-[#E2E8F0] bg-white${
+                wide ? " xl:col-span-2" : ""
+            }`}
+        >
             <div className="border-b border-[#F1F5F9] px-4 py-3">
                 <p className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
                     {title}
