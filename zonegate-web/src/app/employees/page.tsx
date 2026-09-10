@@ -190,6 +190,7 @@ export default function EmployeesPage() {
     const [clearance, setClearance] = useState("ALL");
     const [biometrics, setBiometrics] = useState("ALL");
     const [selectedId, setSelectedId] = useState<string | null>(null);
+    const [page, setPage] = useState(1);
     const [showSyslog, setShowSyslog] = useState(false);
     const [editingPermissions, setEditingPermissions] = useState(false);
     const [actionMessage, setActionMessage] = useState("");
@@ -215,6 +216,7 @@ export default function EmployeesPage() {
     }, [search, affiliation, clearance]);
 
     const selectedPerson = personnel.find((person) => person.id === selectedId);
+    const totalPages = 74;
 
     function batchRevoke() {
         if (!filteredPersonnel.length) {
@@ -511,18 +513,20 @@ export default function EmployeesPage() {
                             <div className="flex items-center gap-2 font-mono text-xs font-medium text-[#64748B]">
                                 <span>ROWS PER PAGE: 25</span>
                                 <span>•</span>
-                                <span>PAGE 1 OF 74</span>
+                                <span>PAGE {page} OF {totalPages}</span>
                             </div>
 
                             <div className="flex items-center gap-1.5">
                                 <button
-                                    disabled
-                                    className="rounded border border-[#E2E8F0] bg-white px-2.5 py-1 font-mono text-xs text-[#64748B] opacity-50"
+                                    type="button"
+                                    onClick={() => setPage((value) => Math.max(1, value - 1))}
+                                    disabled={page === 1}
+                                    className="rounded border border-[#E2E8F0] bg-white px-2.5 py-1 font-mono text-xs text-[#64748B] disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                     PREV
                                 </button>
 
-                                <button className="rounded border border-[#E2E8F0] bg-white px-2.5 py-1 font-mono text-xs font-medium text-[#0F172A] hover:bg-[#F8FAFC]">
+                                <button type="button" onClick={() => setPage((value) => Math.min(totalPages, value + 1))} disabled={page === totalPages} className="rounded border border-[#E2E8F0] bg-white px-2.5 py-1 font-mono text-xs font-medium text-[#0F172A] hover:bg-[#F8FAFC] disabled:cursor-not-allowed disabled:opacity-50">
                                     NEXT
                                 </button>
                             </div>
