@@ -89,49 +89,28 @@ export default function Sidebar({
           }`}
       >
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {/* Strips the white JPEG ground off the logo so it sits on the dark rail. */}
-          <svg
-            width="0"
-            height="0"
-            className="absolute"
-            aria-hidden="true"
-            focusable="false"
-          >
-            <defs>
-              <filter
-                id="zonegate-remove-white"
-                x="0%"
-                y="0%"
-                width="100%"
-                height="100%"
-                colorInterpolationFilters="sRGB"
-              >
-                <feColorMatrix
-                  type="matrix"
-                  values="0 0 0 0 0.0784  0 0 0 0 0.3294  0 0 0 0 0.3922  -0.2976 -1.0013 -0.1011 0 1.36"
-                />
-                <feComposite in2="SourceGraphic" operator="in" />
-              </filter>
-            </defs>
-          </svg>
-
           <div className="flex h-28 items-center gap-2 border-b border-[#1E293B] px-4">
             <Link
               href="/"
               aria-label="ZoneGate home"
               onClick={onClose}
-              className="isolate flex flex-1 items-center justify-center rounded py-3 transition-colors hover:bg-[#152035] focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-[#1FD1A8]"
+              className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded py-3 transition-colors hover:bg-[#152035] focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-[#1FD1A8]"
             >
+              {/* The mark only; the wordmark is real text so it stays crisp
+                  and can be sized independently of the shield. */}
               <Image
-                src="/zonegate-logo.jpeg"
-                alt="ZoneGate"
-                width={960}
-                height={1096}
-                sizes="77px"
+                src="/zonegate-mark.png"
+                alt=""
+                width={546}
+                height={690}
+                sizes="44px"
                 priority
-                className="h-[88px] w-auto object-contain"
-                style={{ filter: "url(#zonegate-remove-white)" }}
+                className="h-11 w-auto"
               />
+
+              <span className="text-xl font-semibold tracking-wide text-white">
+                ZoneGate
+              </span>
             </Link>
 
             <button
