@@ -121,8 +121,8 @@ export default function Sidebar({
                 <Image
                   src="/zonegate-shield.png"
                   alt=""
-                  width={555}
-                  height={689}
+                  width={500}
+                  height={500}
                   sizes="72px"
                   priority
                   className="h-auto w-[72px]"

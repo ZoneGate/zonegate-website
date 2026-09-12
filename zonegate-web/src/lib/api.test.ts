@@ -11,14 +11,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
     ApiError,
     API_URL,
+    changePassword,
+    enrollActor,
     getHealth,
     getPolicyConfig,
+    getSession,
     listActors,
+    listCategories,
     listDecisionContexts,
     listDecisions,
-    requestAuthorization,
+    listZones,
+    login,
+    logout,
     resolveHold,
+    updateActorPermissions,
     updatePolicyConfig,
+    type Actor,
 } from "./api";
 
 /** Captures what the client asked for, and answers with a canned response. */
@@ -202,98 +210,18 @@ describe("roster", () => {
     });
 });
 
-describe("authorization requests", () => {
-    it("posts the transaction as JSON", () => {
-        const spy = mockFetch(() => ({
-            status: 201,
-            body: { decision: {}, receipt: {} },
-        }));
-
-        return requestAuthorization({
-            transaction_id: "tx_1",
-            actor_id: "usr_1",
-            action: "RELEASE_CARGO",
-            resource_id: "CT-1",
-            zone: "PORT_GATE_17",
-            timestamp: "2026-09-10T09:00:00Z",
-            value: "1000.00",
-        }).then(() => {
-            const [url, init] = spy.mock.calls[0];
-
-            expect(String(url)).toBe(`${API_URL}/v1/authorizations`);
-            expect(init?.method).toBe("POST");
-            expect(
-                (init?.headers as Record<string, string>)["Content-Type"]
-            ).toBe("application/json");
-            expect(JSON.parse(String(init?.body)).resource_id).toBe("CT-1");
-        });
-    });
-
-    it("sends metadata only when there is any", () => {
-        const spy = mockFetch(() => ({ status: 201, body: {} }));
-
-        return requestAuthorization({
-            transaction_id: "tx_2",
-            actor_id: "usr_1",
-            action: "RELEASE_CARGO",
-            resource_id: "CT-2",
-            zone: "Z",
-            timestamp: "2026-09-10T09:00:00Z",
-            value: "1.00",
-            metadata: { carrier: "Northline" },
-        }).then(() => {
-            const body = JSON.parse(String(spy.mock.calls[0][1]?.body));
-            expect(body.metadata).toEqual({ carrier: "Northline" });
-        });
-    });
-});
-
-describe("hold resolution", () => {
-    it("posts the verdict to the decision's resolve path", () => {
-        const spy = mockFetch(() => ({ status: 201, body: {} }));
-
-        return resolveHold("dec_abc", {
-            outcome: "DENY",
-            resolved_by: "usr_security_officer_07",
-            note: "no manifest",
-        }).then(() => {
-            const [url, init] = spy.mock.calls[0];
-
-            expect(String(url)).toBe(
-                `${API_URL}/v1/authorizations/dec_abc/resolve`
-            );
-            expect(JSON.parse(String(init?.body))).toEqual({
-                outcome: "DENY",
-                resolved_by: "usr_security_officer_07",
-                note: "no manifest",
-            });
-        });
-    });
-
-    it("escapes a decision id so it cannot alter the path", () => {
-        const spy = mockFetch(() => ({ status: 201, body: {} }));
-
-        return resolveHold("dec/../../admin", {
-            outcome: "APPROVE",
-            resolved_by: "usr_1",
-        }).then(() => {
-            expect(String(spy.mock.calls[0][0])).not.toContain("../");
-        });
-    });
-});
-
 describe("policy configuration", () => {
     it("reads the live configuration", () => {
         mockFetch(() => ({
             body: {
-                high_value_threshold: "100000.00",
+                restricted_categories: { WEAPONS: "ROLE_SECURITY_OFFICER" },
                 window_start_hour: 6,
                 window_end_hour: 20,
             },
         }));
 
         return getPolicyConfig().then((config) => {
-            expect(config.high_value_threshold).toBe("100000.00");
+            expect(config.restricted_categories.WEAPONS).toBe("ROLE_SECURITY_OFFICER");
             expect(config.window_start_hour).toBe(6);
         });
     });
@@ -302,7 +230,7 @@ describe("policy configuration", () => {
         const spy = mockFetch(() => ({ body: {} }));
 
         return updatePolicyConfig({
-            high_value_threshold: "250000.00",
+            restricted_categories: { HAZARDOUS: "ROLE_SAFETY_OFFICER" },
             window_start_hour: 7,
             window_end_hour: 19,
         }).then(() => {
@@ -320,7 +248,7 @@ describe("policy configuration", () => {
         }));
 
         return updatePolicyConfig({
-            high_value_threshold: "1.00",
+            restricted_categories: {},
             window_start_hour: 20,
             window_end_hour: 6,
         }).then(
@@ -330,6 +258,172 @@ describe("policy configuration", () => {
                 expect(error.message).toContain("window_end_hour");
             }
         );
+    });
+});
+
+describe("console sign-in", () => {
+    it("posts the credentials to the auth endpoint", () => {
+        const spy = mockFetch(() => ({ body: { actor: {} } }));
+
+        return login(" usr_console_01 ".trim(), "correct-horse").then(() => {
+            const [url, init] = spy.mock.calls[0];
+
+            expect(String(url)).toBe(`${API_URL}/v1/auth/login`);
+            expect(init?.method).toBe("POST");
+            expect(JSON.parse(String(init?.body))).toEqual({
+                actor_id: "usr_console_01",
+                password: "correct-horse",
+            });
+        });
+    });
+
+    it("sends the session cookie on every call, not only on sign-in", () => {
+        // The session lives in an httpOnly cookie, so a request made without
+        // credentials would read as signed-out no matter who is signed in.
+        const spy = mockFetch(() => ({ body: { actor: {} } }));
+
+        return getSession().then(() => {
+            expect(spy.mock.calls[0][1]?.credentials).toBe("include");
+        });
+    });
+
+    it("surfaces a 401 as a 401 so the gate can tell it from a dead backend", () => {
+        mockFetch(() => ({ status: 401, body: { detail: "No console session" } }));
+
+        return getSession().then(
+            () => expect.unreachable("should have thrown"),
+            (error) => {
+                expect(error).toBeInstanceOf(ApiError);
+                expect(error.status).toBe(401);
+            }
+        );
+    });
+
+    it("treats the 204 from sign-out as success, not a parse failure", () => {
+        mockFetch(() => ({ status: 204 }));
+
+        return logout().then((body) => expect(body).toBeUndefined());
+    });
+
+    it("never puts the new password in the URL", () => {
+        const spy = mockFetch(() => ({ status: 204 }));
+
+        return changePassword("a-brand-new-one").then(() => {
+            const [url, init] = spy.mock.calls[0];
+
+            expect(String(url)).toBe(`${API_URL}/v1/auth/password`);
+            expect(String(url)).not.toContain("a-brand-new-one");
+            expect(JSON.parse(String(init?.body)).password).toBe("a-brand-new-one");
+        });
+    });
+});
+
+describe("employee enrolment", () => {
+    const actor: Actor = {
+        actor_id: "usr_new_01",
+        role: "ROLE_CARGO_OPERATOR",
+        permissions: ["cargo:release"],
+        registered_phone_number: "+14155550199",
+        registered_device_id: "dev_imei_99887766",
+        enrollment_status: "ACTIVE",
+    };
+
+    it("omits the optional fields entirely when they were not given", () => {
+        const spy = mockFetch(() => ({ status: 201, body: {} }));
+
+        return enrollActor(actor).then(() => {
+            const body = JSON.parse(String(spy.mock.calls[0][1]?.body));
+
+            expect(body.actor.actor_id).toBe("usr_new_01");
+            expect("password" in body).toBe(false);
+            expect("device_id" in body).toBe(false);
+        });
+    });
+
+    it("passes a console password through when one was set", () => {
+        const spy = mockFetch(() => ({ status: 201, body: {} }));
+
+        return enrollActor(actor, { password: "let-me-in-please" }).then(() => {
+            const body = JSON.parse(String(spy.mock.calls[0][1]?.body));
+
+            expect(body.password).toBe("let-me-in-please");
+        });
+    });
+
+    it("sends the permissions the editor was showing, so a stale save is refused", () => {
+        const spy = mockFetch(() => ({ body: {} }));
+
+        return updateActorPermissions(
+            "usr new/01",
+            ["cargo:release"],
+            ["cargo:release", "cargo:inspect"]
+        ).then(() => {
+            const [url, init] = spy.mock.calls[0];
+
+            // An id with a slash must not be able to walk the path.
+            expect(String(url)).toBe(
+                `${API_URL}/v1/actors/usr%20new%2F01/permissions`
+            );
+            expect(init?.method).toBe("PUT");
+            expect(JSON.parse(String(init?.body)).expected_permissions).toEqual([
+                "cargo:release",
+                "cargo:inspect",
+            ]);
+        });
+    });
+
+    it("preserves the 409 that means somebody else edited first", () => {
+        mockFetch(() => ({
+            status: 409,
+            body: { detail: "Permissions for 'usr_new_01' changed while you were editing." },
+        }));
+
+        return updateActorPermissions("usr_new_01", [], []).then(
+            () => expect.unreachable("should have thrown"),
+            (error) => {
+                expect(error.status).toBe(409);
+                expect(error.message).toContain("changed while you were editing");
+            }
+        );
+    });
+});
+
+describe("categories and geofences", () => {
+    it("reads the category vocabulary with its authorities", () => {
+        const spy = mockFetch(() => ({
+            body: [
+                { category: "GENERAL", restricted: false, required_authority: null },
+                {
+                    category: "WEAPONS",
+                    restricted: true,
+                    required_authority: "ROLE_SECURITY_OFFICER",
+                },
+            ],
+        }));
+
+        return listCategories().then((options) => {
+            expect(String(spy.mock.calls[0][0])).toBe(`${API_URL}/v1/policy/categories`);
+            expect(options[1].required_authority).toBe("ROLE_SECURITY_OFFICER");
+            expect(options[0].restricted).toBe(false);
+        });
+    });
+
+    it("reads the geofences the gateway actually checks against", () => {
+        const spy = mockFetch(() => ({
+            body: [
+                {
+                    zone: "ZONE_CARGO_BAY_1",
+                    latitude: 37.7749,
+                    longitude: -122.4194,
+                    radius_meters: 500,
+                },
+            ],
+        }));
+
+        return listZones().then((zones) => {
+            expect(String(spy.mock.calls[0][0])).toBe(`${API_URL}/v1/policy/zones`);
+            expect(zones[0].radius_meters).toBe(500);
+        });
     });
 });
 

@@ -21,16 +21,18 @@ import {
     ChevronRight,
     RefreshCw,
     Search,
-    X,
 } from "lucide-react";
 
+import DecisionVerdict from "@/components/DecisionVerdict";
+import ZoneMap from "@/components/ZoneMap";
 import { useQueryParam } from "@/components/useQueryParam";
 import {
     ApiError,
     listDecisionContexts,
-    requestAuthorization,
+    listZones,
     type DecisionContext,
     type DecisionOutcome,
+    type GeofenceZone,
 } from "@/lib/api";
 import {
     badgeLabel,
@@ -105,8 +107,11 @@ function RequestsView({ initialQuery }: { initialQuery: string }) {
 
     // null keeps the queue on screen; an id opens that record full width.
     const [openId, setOpenId] = useState<string | null>(null);
-    const [composerOpen, setComposerOpen] = useState(false);
     const [toast, setToast] = useState<string | null>(null);
+
+    // Drawn on the detail map. The registry is small and never changes at
+    // runtime, so it is fetched once alongside the queue.
+    const [geofences, setGeofences] = useState<GeofenceZone[]>([]);
 
     // Bumping this re-runs the fetch; state is only set from its callbacks.
     const [reloadToken, setReloadToken] = useState(0);
@@ -137,6 +142,22 @@ function RequestsView({ initialQuery }: { initialQuery: string }) {
             cancelled = true;
         };
     }, [reloadToken]);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        // A console that cannot reach the zone registry still shows every
+        // decision; only the map is missing, so this failure is swallowed.
+        listZones()
+            .then((loaded) => {
+                if (!cancelled) setGeofences(loaded);
+            })
+            .catch(() => undefined);
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     useEffect(() => {
         if (!toast) return;
@@ -198,6 +219,7 @@ function RequestsView({ initialQuery }: { initialQuery: string }) {
         return (
             <RecordDetail
                 context={open}
+                zones={geofences}
                 onBack={() => setOpenId(null)}
             />
         );
@@ -461,16 +483,6 @@ function RequestsView({ initialQuery }: { initialQuery: string }) {
                 )}
             </section>
 
-            {composerOpen && (
-                <Composer
-                    onClose={() => setComposerOpen(false)}
-                    onSubmitted={(message) => {
-                        setComposerOpen(false);
-                        setToast(message);
-                        reload();
-                    }}
-                />
-            )}
         </div>
     );
 }
@@ -503,9 +515,11 @@ function OutcomeBadge({
 
 function RecordDetail({
     context,
+    zones,
     onBack,
 }: {
     context: DecisionContext;
+    zones: GeofenceZone[];
     onBack: () => void;
 }) {
     const decision = context.decision;
@@ -513,6 +527,7 @@ function RecordDetail({
     const evidence = context.evidence;
     const resolution = decision.resolution;
     const outcome = effectiveOutcome(decision);
+    const geofence = zones.find((entry) => entry.zone === transaction?.zone);
 
     return (
         <div className="flex w-full flex-col gap-6">
@@ -543,6 +558,8 @@ function RecordDetail({
                     awaiting={isAwaitingAuthority(decision)}
                 />
             </section>
+
+            <DecisionVerdict decision={decision} />
 
             <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                 <Panel title="Policy Outcome">
@@ -588,7 +605,11 @@ function RecordDetail({
                             />
                             <Field label="Zone" value={transaction.zone} />
                             <Field
-                                label="Value"
+                                label="Category"
+                                value={transaction.category ?? "GENERAL"}
+                            />
+                            <Field
+                                label="Declared value"
                                 value={`$${transaction.value}`}
                             />
                             <Field
@@ -761,42 +782,40 @@ function RecordDetail({
 
                 {resolution && (
                     <Panel title="Human Resolution">
-                        <Field
-                            label="Final outcome"
-                            value={resolution.outcome}
-                        />
-                        <Field
-                            label="Decided by"
-                            value={resolution.resolved_by}
-                        />
-                        <Field
-                            label="Authority"
-                            value={resolution.authority_role}
-                        />
+                        {/* The verdict and the note are already at the top of
+                            the record; this is the structured version of the
+                            same facts, for anyone reading the audit trail. */}
+                        <Field label="Final outcome" value={resolution.outcome} />
+                        <Field label="Decided by" value={resolution.resolved_by} />
+                        <Field label="Authority" value={resolution.authority_role} />
                         <Field
                             label="Decided at"
                             value={shortStamp(resolution.resolved_at)}
                         />
-
-                        {resolution.note && (
-                            <p className="mt-3 text-sm leading-relaxed text-[#64748B]">
-                                {resolution.note}
-                            </p>
-                        )}
+                        <Field
+                            label="Engine outcome"
+                            value={`${decision.decision} (never rewritten)`}
+                        />
                     </Panel>
                 )}
 
-                {context.receipt?.token && (
-                    <Panel title="Scoped Authorization Token">
-                        <p className="break-all font-mono text-[10px] leading-relaxed text-[#0F172A]">
-                            {context.receipt.token}
+                <Panel title="Geofence Checked">
+                    {geofence ? (
+                        <ZoneMap
+                            latitude={geofence.latitude}
+                            longitude={geofence.longitude}
+                            radiusMeters={geofence.radius_meters}
+                            label={geofence.zone}
+                            verified={evidence?.location_verified ?? null}
+                        />
+                    ) : (
+                        <p className="text-sm leading-relaxed text-[#64748B]">
+                            {transaction
+                                ? `Zone '${transaction.zone}' is not in the gateway's registry, so the location check fell back to the default geofence. There is no circle to draw for it.`
+                                : "The transaction behind this decision is no longer on record."}
                         </p>
-
-                        <p className="mt-2 text-xs text-[#94A3B8]">
-                            Bound to this actor, action, resource and zone.
-                        </p>
-                    </Panel>
-                )}
+                    )}
+                </Panel>
             </section>
         </div>
     );
@@ -925,177 +944,3 @@ function EvidenceRow({
     );
 }
 
-/**
- * Runs a transaction through the real pipeline.
- *
- * The console does not record an outcome of its own: it posts the transaction
- * and shows whatever the policy engine answered.
- */
-function Composer({
-    onClose,
-    onSubmitted,
-}: {
-    onClose: () => void;
-    onSubmitted: (message: string) => void;
-}) {
-    const [actorId, setActorId] = useState("usr_cargo_operator_01");
-    const [resourceId, setResourceId] = useState("");
-    const [zone, setZone] = useState("PORT_GATE_17");
-    const [value, setValue] = useState("25000.00");
-    const [carrier, setCarrier] = useState("");
-
-    const [busy, setBusy] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-
-    const submit = async (event: React.FormEvent) => {
-        event.preventDefault();
-
-        if (!resourceId.trim()) {
-            setError("Enter the container or resource identifier.");
-            return;
-        }
-
-        setBusy(true);
-        setError(null);
-
-        const now = new Date();
-
-        try {
-            const result = await requestAuthorization({
-                transaction_id: `tx_console_${now.getTime()}`,
-                actor_id: actorId.trim(),
-                action: "RELEASE_CARGO",
-                resource_id: resourceId.trim(),
-                zone: zone.trim(),
-                timestamp: now.toISOString(),
-                value: value.trim() || "0.0",
-                // Free-form; only what an operator actually typed goes here.
-                metadata: carrier.trim() ? { carrier: carrier.trim() } : {},
-            });
-
-            const decision = result.decision;
-            const label = isAwaitingAuthority(decision)
-                ? `HOLD — handed to ${decision.required_authority ?? "an authority"}`
-                : decision.decision;
-
-            onSubmitted(
-                `${decision.decision_id}: ${label}`
-            );
-        } catch (caught) {
-            setError(
-                caught instanceof ApiError
-                    ? caught.message
-                    : "Unexpected error submitting the authorization"
-            );
-            setBusy(false);
-        }
-    };
-
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0F172A]/40 p-4">
-            <div className="w-full max-w-lg rounded-lg border border-[#E2E8F0] bg-white">
-                <div className="flex items-center justify-between border-b border-[#F1F5F9] px-4 py-3">
-                    <div>
-                        <p className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
-                            New Authorization
-                        </p>
-
-                        <p className="mt-0.5 text-xs text-[#94A3B8]">
-                            Runs the full evidence and policy pipeline
-                        </p>
-                    </div>
-
-                    <button
-                        type="button"
-                        onClick={onClose}
-                        className="rounded p-1 text-[#64748B] transition hover:bg-[#F1F5F9]"
-                        aria-label="Close"
-                    >
-                        <X size={16} />
-                    </button>
-                </div>
-
-                <form onSubmit={submit} className="flex flex-col gap-3 p-4">
-                    <Input
-                        label="Actor ID"
-                        value={actorId}
-                        onChange={setActorId}
-                    />
-
-                    <Input
-                        label="Container / Resource"
-                        value={resourceId}
-                        onChange={setResourceId}
-                        placeholder="CT-928411"
-                    />
-
-                    <Input label="Target Zone" value={zone} onChange={setZone} />
-
-                    <Input
-                        label="Declared Value (USD)"
-                        value={value}
-                        onChange={setValue}
-                    />
-
-                    <Input
-                        label="Carrier (optional)"
-                        value={carrier}
-                        onChange={setCarrier}
-                        placeholder="Recorded as transaction metadata"
-                    />
-
-                    {error && (
-                        <p className="rounded border border-[#FECACA] bg-[#FEF2F2] px-3 py-2 font-mono text-[11px] text-[#B91C1C]">
-                            {error}
-                        </p>
-                    )}
-
-                    <div className="mt-1 flex items-center justify-end gap-2">
-                        <button
-                            type="button"
-                            onClick={onClose}
-                            className="rounded border border-[#E2E8F0] px-3 py-2 text-xs text-[#64748B] transition hover:border-[#CBD5E1]"
-                        >
-                            Cancel
-                        </button>
-
-                        <button
-                            type="submit"
-                            disabled={busy}
-                            className="rounded bg-[#0D9488] px-4 py-2 text-xs font-semibold text-white transition hover:bg-[#0F766E] disabled:opacity-50"
-                        >
-                            {busy ? "Evaluating…" : "Request Authorization"}
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    );
-}
-
-function Input({
-    label,
-    value,
-    onChange,
-    placeholder,
-}: {
-    label: string;
-    value: string;
-    onChange: (next: string) => void;
-    placeholder?: string;
-}) {
-    return (
-        <label className="flex flex-col gap-1">
-            <span className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
-                {label}
-            </span>
-
-            <input
-                value={value}
-                placeholder={placeholder}
-                onChange={(event) => onChange(event.target.value)}
-                className="rounded border border-[#E2E8F0] bg-white px-3 py-2 font-mono text-xs outline-none focus:border-[#0D9488]"
-            />
-        </label>
-    );
-}
