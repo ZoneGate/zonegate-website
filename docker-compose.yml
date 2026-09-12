@@ -3,13 +3,9 @@
 #   docker compose up -d                          # console on :3000
 #   docker compose --profile tools run --rm test  # the unit tests
 #
-# The console is a browser app: it talks to the API from the visitor's browser,
-# not from this container. NEXT_PUBLIC_API_URL therefore has to be an address
-# the browser can reach, and Next inlines it at build time -- changing it means
-# rebuilding, not restarting.
-#
-# With the backend running from its own compose file on the same machine, the
-# default below is already correct.
+# The browser uses /api/backend on the site's own origin. Next.js forwards
+# requests to the host's backend. BACKEND_API_URL is captured at build time;
+# rebuild the web image when changing that address.
 
 name: zonegate-web
 
@@ -18,9 +14,12 @@ services:
     build:
       context: ./zonegate-web
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:8000}
+        NEXT_PUBLIC_API_URL: /api/backend
+        BACKEND_API_URL: ${BACKEND_API_URL:-http://host.docker.internal:8000}
     ports:
       - "3000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   test:
