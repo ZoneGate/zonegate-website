@@ -126,8 +126,9 @@ export default function LoginScreen({ unreachable, onSignedIn }: {
                 </form>
 
                 <p className="mt-8 text-center text-sm leading-relaxed text-[#94A3B8]">
-                    Accounts are not created here. If you cannot sign in, ask an
-                    operator with console access to enrol you or reset your password.
+                    The console is for supervisors and officers. Cargo personnel sign
+                    in on the ZoneGate mobile app. Accounts are not created here: ask a
+                    supervisor to enrol you or reset your password.
                 </p>
             </div>
         </div>

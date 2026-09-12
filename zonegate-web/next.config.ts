@@ -9,6 +9,14 @@ const nextConfig: NextConfig = {
     return [{ source: "/api/backend/:path*", destination: `${backend}/:path*` }];
   },
 
+  experimental: {
+    // The rewrite above proxies to the API with a 30 s default timeout. A
+    // decision runs the local agent model, and the first one after the model
+    // has been idle loads it into memory first, which can take longer than
+    // that; the proxy would then drop a request the backend still completes.
+    proxyTimeout: 120_000,
+  },
+
   // Pin the workspace root: a stray package-lock.json above this folder
   // otherwise makes Turbopack infer the wrong project root.
   turbopack: {
