@@ -566,6 +566,70 @@ function RecordDetail({
             <DecisionVerdict decision={decision} />
 
             <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                {/* The map leads: it is the one panel that shows where the device
+                    was checked, and it was lost below the fold. */}
+                {/* A request refused before any evidence was gathered never
+                    had its location checked; drawing a zone would imply it was. */}
+                {evidence && (
+                <Panel title="Geofence Checked">
+                    {geofence ? (
+                        <ZoneMap
+                            latitude={geofence.latitude}
+                            longitude={geofence.longitude}
+                            radiusMeters={geofence.radius_meters}
+                            label={geofence.zone}
+                            verified={evidence?.location_verified ?? null}
+                        />
+                    ) : (
+                        <p className="text-sm leading-relaxed text-[#64748B]">
+                            {transaction
+                                ? `Zone '${transaction.zone}' is not in the gateway's registry, so the location check fell back to the default geofence. There is no circle to draw for it.`
+                                : "The transaction behind this decision is no longer on record."}
+                        </p>
+                    )}
+                </Panel>
+                )}
+                <Panel title="Network Evidence">
+                    {evidence ? (
+                        <>
+                            <EvidenceRow
+                                label="Number verified"
+                                state={evidence.number_verified}
+                            />
+                            <EvidenceRow
+                                label="Location verified"
+                                state={evidence.location_verified}
+                            />
+                            <EvidenceRow
+                                label="Recent SIM swap"
+                                state={evidence.recent_sim_swap}
+                                invert
+                            />
+                            <EvidenceRow
+                                label="Recent device swap"
+                                state={evidence.recent_device_swap}
+                                invert
+                            />
+                            <EvidenceRow
+                                label="Device reachable"
+                                state={evidence.reachable}
+                            />
+
+                            {context.evidence_plan && (
+                                <p className="mt-3 font-mono text-[10px] leading-relaxed text-[#94A3B8]">
+                                    Collected:{" "}
+                                    {context.evidence_plan.combined.join(", ") ||
+                                        "none"}
+                                </p>
+                            )}
+                        </>
+                    ) : (
+                        <p className="text-sm text-[#64748B]">
+                            No evidence was recorded for this decision.
+                        </p>
+                    )}
+                </Panel>
+
                 <Panel title="Policy Outcome">
                     {decision.reasons.map((reason) => (
                         <p
@@ -705,47 +769,6 @@ function RecordDetail({
                     )}
                 </Panel>
 
-                <Panel title="Network Evidence">
-                    {evidence ? (
-                        <>
-                            <EvidenceRow
-                                label="Number verified"
-                                state={evidence.number_verified}
-                            />
-                            <EvidenceRow
-                                label="Location verified"
-                                state={evidence.location_verified}
-                            />
-                            <EvidenceRow
-                                label="Recent SIM swap"
-                                state={evidence.recent_sim_swap}
-                                invert
-                            />
-                            <EvidenceRow
-                                label="Recent device swap"
-                                state={evidence.recent_device_swap}
-                                invert
-                            />
-                            <EvidenceRow
-                                label="Device reachable"
-                                state={evidence.reachable}
-                            />
-
-                            {context.evidence_plan && (
-                                <p className="mt-3 font-mono text-[10px] leading-relaxed text-[#94A3B8]">
-                                    Collected:{" "}
-                                    {context.evidence_plan.combined.join(", ") ||
-                                        "none"}
-                                </p>
-                            )}
-                        </>
-                    ) : (
-                        <p className="text-sm text-[#64748B]">
-                            No evidence was recorded for this decision.
-                        </p>
-                    )}
-                </Panel>
-
                 <Panel title="Agent Assessment (Advisory)">
                     {decision.context_evaluation ? (
                         <>
@@ -803,27 +826,6 @@ function RecordDetail({
                     </Panel>
                 )}
 
-                {/* A request refused before any evidence was gathered never
-                    had its location checked; drawing a zone would imply it was. */}
-                {evidence && (
-                <Panel title="Geofence Checked">
-                    {geofence ? (
-                        <ZoneMap
-                            latitude={geofence.latitude}
-                            longitude={geofence.longitude}
-                            radiusMeters={geofence.radius_meters}
-                            label={geofence.zone}
-                            verified={evidence?.location_verified ?? null}
-                        />
-                    ) : (
-                        <p className="text-sm leading-relaxed text-[#64748B]">
-                            {transaction
-                                ? `Zone '${transaction.zone}' is not in the gateway's registry, so the location check fell back to the default geofence. There is no circle to draw for it.`
-                                : "The transaction behind this decision is no longer on record."}
-                        </p>
-                    )}
-                </Panel>
-                )}
             </section>
         </div>
     );
