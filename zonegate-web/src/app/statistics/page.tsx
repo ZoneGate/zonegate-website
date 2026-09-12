@@ -88,6 +88,7 @@ type FlagCode =
     | "SIM_SWAP"
     | "DEVICE_SWAP"
     | "PERMISSION"
+    | "CATEGORY"
     | "WINDOW";
 
 const FLAG_LABELS: Record<FlagCode, { title: string; description: string }> = {
@@ -111,9 +112,13 @@ const FLAG_LABELS: Record<FlagCode, { title: string; description: string }> = {
         title: "Permission Denied",
         description: "Actor lacked the permission the action requires",
     },
+    CATEGORY: {
+        title: "Restricted Category",
+        description: "Cargo category that only a named authority may release",
+    },
     WINDOW: {
         title: "Out of Window",
-        description: "High-value request outside operational hours",
+        description: "Release requested outside operational hours",
     },
 };
 
@@ -127,6 +132,7 @@ function flagFor(context: DecisionContext): FlagCode {
     if (evidence?.recent_sim_swap === true) return "SIM_SWAP";
     if (evidence?.recent_device_swap === true) return "DEVICE_SWAP";
     if (reason.includes("permission")) return "PERMISSION";
+    if (reason.includes("category")) return "CATEGORY";
     return "WINDOW";
 }
 

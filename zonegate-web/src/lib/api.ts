@@ -51,7 +51,10 @@ export type TransactionRequest = {
     resource_id: string;
     zone: string;
     timestamp: string;
+    /** Declared value, recorded for the audit trail. It no longer decides anything. */
     value: string;
+    /** Cargo category. A restricted one is escalated instead of released. */
+    category: string;
     metadata: Record<string, string>;
 };
 
@@ -130,9 +133,25 @@ export type EnrollmentResponse = {
 };
 
 export type PolicyConfig = {
-    high_value_threshold: string;
+    /** Cargo category -> the authority role that must approve it. */
+    restricted_categories: Record<string, string>;
     window_start_hour: number;
     window_end_hour: number;
+};
+
+/** One cargo category, and who has to approve it if anyone does. */
+export type CategoryOption = {
+    category: string;
+    restricted: boolean;
+    required_authority: string | null;
+};
+
+/** A zone as the evidence gateway actually asks the carrier about it. */
+export type GeofenceZone = {
+    zone: string;
+    latitude: number;
+    longitude: number;
+    radius_meters: number;
 };
 
 export type HealthReport = {
@@ -276,6 +295,20 @@ export function updateActorPermissions(actorId: string, permissions: string[], e
     });
 }
 
+export function listCategories() {
+    return request<CategoryOption[]>("/v1/policy/categories");
+}
+
+/**
+ * The geofences the gateway verifies device location against.
+ *
+ * The console map draws these, so it shows the circle the carrier was actually
+ * asked about rather than an illustration of one.
+ */
+export function listZones() {
+    return request<GeofenceZone[]>("/v1/policy/zones");
+}
+
 export function getPolicyConfig() {
     return request<PolicyConfig>("/v1/policy/config");
 }
@@ -290,22 +323,6 @@ export function updatePolicyConfig(config: PolicyConfig) {
 export function getDecisionContext(decisionId: string) {
     return request<DecisionContext>(
         `/v1/authorizations/${encodeURIComponent(decisionId)}/context`
-    );
-}
-
-export function requestAuthorization(transaction: {
-    transaction_id: string;
-    actor_id: string;
-    action: string;
-    resource_id: string;
-    zone: string;
-    timestamp: string;
-    value: string;
-    metadata?: Record<string, string>;
-}) {
-    return request<{ decision: PolicyDecision; receipt: Receipt }>(
-        "/v1/authorizations",
-        { method: "POST", body: JSON.stringify(transaction) }
     );
 }
 

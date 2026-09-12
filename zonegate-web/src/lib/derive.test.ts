@@ -86,6 +86,7 @@ function context(
             zone,
             timestamp: decidedAt,
             value: "15000.00",
+            category: "GENERAL",
             metadata: {},
         },
         evidence: null,
