@@ -20,9 +20,7 @@ import {
     listDecisions,
     resolveHold,
 } from "@/lib/api";
-
-/** The signed-in supervisor. A real deployment takes this from the session. */
-const SUPERVISOR = "OFFICER K. VANCE";
+import { useSession } from "@/components/layout/SessionGate";
 
 const money = new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -41,6 +39,9 @@ function formatUtc(iso: string) {
 }
 
 export default function HoldsPage() {
+    // The resolution is recorded under whoever is signed in to the console,
+    // so the audit trail names the person who actually decided.
+    const { actor } = useSession();
     const [holds, setHolds] = useState<PolicyDecision[]>([]);
     const [openId, setOpenId] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
@@ -199,8 +200,8 @@ export default function HoldsPage() {
 
                 <QueueTile
                     label="Acting As"
-                    value={SUPERVISOR.split(" ").slice(-1)[0]}
-                    meta={SUPERVISOR}
+                    value={actor.actor_id}
+                    meta={actor.role}
                     icon={<CheckCircle2 size={17} />}
                 />
             </section>
@@ -331,6 +332,7 @@ function HoldReview({
     onBack: () => void;
     onResolved: (message: string) => void;
 }) {
+    const { actor } = useSession();
     const [context, setContext] = useState<DecisionContext | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -367,14 +369,14 @@ function HoldReview({
         try {
             await resolveHold(decisionId, {
                 outcome,
-                resolved_by: SUPERVISOR,
+                resolved_by: actor.actor_id,
                 note: note.trim(),
             });
 
             onResolved(
                 outcome === "APPROVE"
-                    ? `${decisionId} approved by ${SUPERVISOR} — the release is authorized`
-                    : `${decisionId} denied by ${SUPERVISOR}`
+                    ? `${decisionId} approved by ${actor.actor_id} — the release is authorized`
+                    : `${decisionId} denied by ${actor.actor_id}`
             );
         } catch (caught) {
             setError(

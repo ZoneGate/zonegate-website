@@ -528,6 +528,10 @@ function RecordDetail({
     const resolution = decision.resolution;
     const outcome = effectiveOutcome(decision);
     const geofence = zones.find((entry) => entry.zone === transaction?.zone);
+    // Identity and unsupported-action refusals are recorded before planning
+    // starts, so they carry neither a plan nor evidence. Any decision that got
+    // as far as planning has at least one of the two.
+    const reachedPlanning = Boolean(context.evidence_plan || evidence);
 
     return (
         <div className="flex w-full flex-col gap-6">
@@ -632,8 +636,7 @@ function RecordDetail({
                 </Panel>
 
                 <Panel title="Evidence Plan" wide>
-                    {context.evidence_plan &&
-                    context.evidence_plan.offered_optional.length > 0 ? (
+                    {context.evidence_plan ? (
                         <>
                             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                                 <PlanColumn
@@ -695,8 +698,9 @@ function RecordDetail({
                         </>
                     ) : (
                         <p className="text-sm text-[#64748B]">
-                            This decision predates evidence-plan tracing, so how the
-                            plan was reached was not recorded.
+                            {reachedPlanning
+                                ? "This decision predates evidence-plan tracing, so how the plan was reached was not recorded."
+                                : "The request was refused before evidence planning, so no plan was drawn up and the carrier was never asked."}
                         </p>
                     )}
                 </Panel>
@@ -773,9 +777,9 @@ function RecordDetail({
                         </>
                     ) : (
                         <p className="text-sm leading-relaxed text-[#64748B]">
-                            No agent assessment was recorded. Evidence planning
-                            fell back to the mandatory baseline and the decision
-                            was made on network facts alone.
+                            {reachedPlanning
+                                ? "No agent assessment was recorded. Evidence planning fell back to the mandatory baseline and the decision was made on network facts alone."
+                                : "The agent was never consulted: the request was refused before evidence planning, on the record of who asked rather than on network facts."}
                         </p>
                     )}
                 </Panel>
@@ -799,6 +803,9 @@ function RecordDetail({
                     </Panel>
                 )}
 
+                {/* A request refused before any evidence was gathered never
+                    had its location checked; drawing a zone would imply it was. */}
+                {evidence && (
                 <Panel title="Geofence Checked">
                     {geofence ? (
                         <ZoneMap
@@ -816,6 +823,7 @@ function RecordDetail({
                         </p>
                     )}
                 </Panel>
+                )}
             </section>
         </div>
     );
