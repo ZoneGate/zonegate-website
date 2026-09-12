@@ -21,6 +21,7 @@ import {
     resolveHold,
 } from "@/lib/api";
 import { useSession } from "@/components/layout/SessionGate";
+import { holdsAuthority } from "@/lib/roles";
 
 const money = new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -389,6 +390,9 @@ function HoldReview({
     const decision = context?.decision;
     const transaction = context?.transaction;
     const evidence = context?.evidence;
+    // Only the role the engine handed this hold to may settle it. The backend
+    // refuses anyone else; the console says so before a button is pressed.
+    const canDecide = holdsAuthority(actor.role, decision?.required_authority);
 
     return (
         <div className="flex w-full flex-col gap-6">
@@ -579,6 +583,17 @@ function HoldReview({
                             Your decision as {decision.required_authority}
                         </p>
 
+                        {!canDecide && (
+                            <p
+                                role="note"
+                                className="mt-3 rounded border border-[#FDE68A] bg-[#FFFBEB] px-3 py-2 text-sm text-[#92400E]"
+                            >
+                                This hold can only be resolved by{" "}
+                                <span className="font-mono">{decision.required_authority ?? "a named authority"}</span>.
+                                You are signed in as <span className="font-mono">{actor.role}</span>.
+                            </p>
+                        )}
+
                         <label className="mt-4 flex flex-col gap-1.5">
                             <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-[#64748B]">
                                 Justification (recorded in the audit trail)
@@ -589,6 +604,7 @@ function HoldReview({
                                 onChange={(event) => setNote(event.target.value)}
                                 rows={3}
                                 placeholder="What did you verify before deciding?"
+                                disabled={!canDecide}
                                 className="w-full rounded border border-[#CBD5E1] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#0D9488] focus:ring-2 focus:ring-[#0D9488]/15"
                             />
                         </label>
@@ -597,7 +613,7 @@ function HoldReview({
                             <button
                                 type="button"
                                 onClick={() => void submit("DENY")}
-                                disabled={submitting !== null}
+                                disabled={submitting !== null || !canDecide}
                                 className="flex items-center justify-center gap-2 rounded bg-[#B91C1C] px-6 py-2.5 text-sm font-medium text-white transition hover:bg-[#991B1B] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#991B1B] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                                 <XCircle size={16} />
@@ -607,7 +623,7 @@ function HoldReview({
                             <button
                                 type="button"
                                 onClick={() => void submit("APPROVE")}
-                                disabled={submitting !== null}
+                                disabled={submitting !== null || !canDecide}
                                 className="flex items-center justify-center gap-2 rounded bg-[#0D9488] px-6 py-2.5 text-sm font-medium text-white transition hover:bg-[#0F766E] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0F766E] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                                 <CheckCircle2 size={16} />
