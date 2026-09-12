@@ -7,8 +7,8 @@
  * permissions are what the policy engine decides on, and the registered phone
  * and device are how the Evidence Gateway recognises this person at the gate.
  * Letting someone edit those about themselves would defeat the model, so they
- * are shown read-only here and changed from the roster by an operator with
- * console access. The password is the one thing this screen writes.
+ * are shown read-only here and changed from the roster by a supervisor on the
+ * console. The password is the one thing this screen writes.
  */
 
 import { useEffect, useState } from "react";
