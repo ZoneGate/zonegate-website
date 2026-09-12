@@ -19,7 +19,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
     ChevronLeft,
     ChevronRight,
-    Plus,
     RefreshCw,
     Search,
     X,
@@ -242,14 +241,6 @@ function RequestsView({ initialQuery }: { initialQuery: string }) {
                         REFRESH
                     </button>
 
-                    <button
-                        type="button"
-                        onClick={() => setComposerOpen(true)}
-                        className="flex items-center gap-2 rounded bg-[#0D9488] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#0F766E]"
-                    >
-                        <Plus size={14} />
-                        New Authorization
-                    </button>
                 </div>
             </section>
 

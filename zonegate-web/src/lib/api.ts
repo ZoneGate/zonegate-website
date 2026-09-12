@@ -1,13 +1,12 @@
 /**
  * Client for the ZoneGate authorization API.
  *
- * The dashboard is a separate origin from the backend, so every call is made
- * from the browser against NEXT_PUBLIC_API_URL and the backend allows that
- * origin through CORS.
+ * Requests use the site's own backend proxy by default. A public API URL can
+ * still be supplied for deployments that explicitly use cross-origin access.
  */
 
 export const API_URL =
-    process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+    process.env.NEXT_PUBLIC_API_URL ?? "/api/backend";
 
 export type DecisionOutcome = "APPROVE" | "HOLD" | "DENY";
 
@@ -119,6 +118,17 @@ export type RosterEntry = {
     binding: DeviceBinding | null;
 };
 
+/** What the sign-in endpoints return. */
+export type SessionResponse = {
+    actor: Actor;
+};
+
+/** What `POST /v1/actors` returns: the saved actor and the binding made for it. */
+export type EnrollmentResponse = {
+    actor: Actor;
+    binding: DeviceBinding;
+};
+
 export type PolicyConfig = {
     high_value_threshold: string;
     window_start_hour: number;
@@ -146,6 +156,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     try {
         response = await fetch(`${API_URL}${path}`, {
             ...init,
+            // The session lives in an httpOnly cookie set by the backend.
+            credentials: "include",
             headers: {
                 "Content-Type": "application/json",
                 ...(init?.headers ?? {}),
@@ -209,8 +221,59 @@ export function listDecisionContexts(params: {
     return request<DecisionContext[]>(`/v1/authorizations/contexts${suffix}`);
 }
 
+/** Signs an enrolled operator in. The session cookie comes back on the response. */
+export function login(actorId: string, password: string) {
+    return request<SessionResponse>("/v1/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ actor_id: actorId, password }),
+    });
+}
+
+export function logout() {
+    return request<void>("/v1/auth/logout", { method: "POST" });
+}
+
+/** Who the console is signed in as. Throws ApiError with status 401 when nobody is. */
+export function getSession() {
+    return request<SessionResponse>("/v1/auth/session");
+}
+
+/** Changes the signed-in operator's own console password. */
+export function changePassword(password: string) {
+    return request<void>("/v1/auth/password", {
+        method: "POST",
+        body: JSON.stringify({ password }),
+    });
+}
+
 export function listActors(limit = 200) {
     return request<RosterEntry[]>(`/v1/actors?limit=${limit}`);
+}
+
+/**
+ * Enrolls an actor and binds their device in one call.
+ *
+ * Both halves matter: the authorization pipeline checks every request against
+ * an enrolled actor *and* an active binding, so an actor saved without one can
+ * only ever be denied. `deviceId` overrides the device the binding is made
+ * against; omitted, the backend binds the actor's registered device.
+ */
+export function enrollActor(actor: Actor, options?: { deviceId?: string; password?: string }) {
+    return request<EnrollmentResponse>("/v1/actors", {
+        method: "POST",
+        body: JSON.stringify({
+            actor,
+            ...(options?.deviceId ? { device_id: options.deviceId } : {}),
+            ...(options?.password ? { password: options.password } : {}),
+        }),
+    });
+}
+
+export function updateActorPermissions(actorId: string, permissions: string[], expectedPermissions: string[]) {
+    return request<Actor>(`/v1/actors/${encodeURIComponent(actorId)}/permissions`, {
+        method: "PUT",
+        body: JSON.stringify({ permissions, expected_permissions: expectedPermissions }),
+    });
 }
 
 export function getPolicyConfig() {

@@ -12,17 +12,19 @@ import {
   SlidersHorizontal,
   ChevronDown,
   Clock,
+  LogOut,
   User,
   X,
 } from "lucide-react";
 
 import { listDecisions } from "@/lib/api";
+import { useSession } from "@/components/layout/SessionGate";
 
 const menuItems = [
   { label: "Dashboard", href: "/", icon: Grid2X2 },
   { label: "Requests", href: "/requests", icon: ClipboardList },
   { label: "Hold Queue", href: "/holds", icon: Clock, live: true },
-  { label: "Couriers / Employees", href: "/employees", icon: BadgeCheck },
+  { label: "Employees", href: "/employees", icon: BadgeCheck },
   { label: "Statistics", href: "/statistics", icon: BarChart3 },
 ];
 
@@ -42,6 +44,7 @@ export default function Sidebar({
   onClose?: () => void;
 }) {
   const pathname = usePathname();
+  const { actor, signOut } = useSession();
   const onSettings = pathname.startsWith("/settings");
 
   // Open on the settings page itself, opened by the link, folded by the chevron.
@@ -74,6 +77,21 @@ export default function Sidebar({
 
   return (
     <>
+      <svg aria-hidden="true" width="0" height="0" className="absolute pointer-events-none">
+        <defs>
+          <filter id="zonegate-remove-white" x="0" y="0" width="100%" height="100%" colorInterpolationFilters="sRGB">
+            <feColorMatrix
+              in="SourceGraphic"
+              type="matrix"
+              values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  -3 -3 -3 0 6"
+              result="logo-mask"
+            />
+            <feFlood floodColor="#155566" result="brand-color" />
+            <feComposite in="brand-color" in2="logo-mask" operator="in" result="logo" />
+            <feComposite in="logo" in2="SourceAlpha" operator="in" />
+          </filter>
+        </defs>
+      </svg>
       {/* Backdrop, mobile only */}
       <div
         onClick={onClose}
@@ -89,27 +107,31 @@ export default function Sidebar({
           }`}
       >
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="flex h-28 items-center gap-2 border-b border-[#1E293B] px-4">
+          <div className="relative border-b border-[#1E293B] p-4">
             <Link
               href="/"
               aria-label="ZoneGate home"
               onClick={onClose}
-              className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded py-3 transition-colors hover:bg-[#152035] focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-[#1FD1A8]"
+              className="flex items-center justify-center py-2 transition-opacity hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1FD1A8]"
             >
-              {/* The mark only; the wordmark is real text so it stays crisp
-                  and can be sized independently of the shield. */}
-              <Image
-                src="/zonegate-mark.png"
-                alt=""
-                width={546}
-                height={690}
-                sizes="44px"
-                priority
-                className="h-11 w-auto"
-              />
+              {/* Shield artwork plus live text, the same pairing the sign-in
+                  screen uses, so the wordmark's letterforms are drawn by the
+                  font rather than baked into the image. */}
+              <span className="flex flex-col items-center gap-2 py-1">
+                <Image
+                  src="/zonegate-shield.png"
+                  alt=""
+                  width={555}
+                  height={689}
+                  sizes="72px"
+                  priority
+                  className="h-auto w-[72px]"
+                  style={{ filter: "url(#zonegate-remove-white)" }}
+                />
 
-              <span className="text-xl font-semibold tracking-wide text-white">
-                ZoneGate
+                <span className="text-xl font-bold leading-none tracking-tight text-[#155566]">
+                  ZoneGate
+                </span>
               </span>
             </Link>
 
@@ -117,7 +139,7 @@ export default function Sidebar({
               type="button"
               onClick={onClose}
               aria-label="Close navigation"
-              className="ml-auto rounded p-1 text-[#94A3B8] transition-colors hover:bg-[#1E293B] hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1FD1A8] lg:hidden"
+              className="absolute right-5 top-5 flex h-8 w-8 items-center justify-center rounded-md text-[#94A3B8] transition-colors hover:bg-[#1E293B] hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1FD1A8] lg:hidden"
             >
               <X size={18} />
             </button>
@@ -244,19 +266,35 @@ export default function Sidebar({
             </span>
           </div>
 
-          <div className="flex items-center gap-3 border-t border-[#1E293B] pt-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full border border-[#334155] bg-[#1E293B]">
-              <User size={16} className="text-[#1FD1A8]" />
-            </div>
+          <div className="border-t border-[#1E293B] pt-3">
+            <Link
+              href="/account"
+              onClick={onClose}
+              aria-current={pathname === "/account" ? "page" : undefined}
+              className={`-mx-1 flex items-center gap-3 rounded px-1 py-1 transition hover:bg-[#1E293B] ${pathname === "/account" ? "bg-[#1E293B]" : ""}`}
+            >
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[#334155] bg-[#1E293B]">
+                <User size={16} className="text-[#1FD1A8]" />
+              </div>
 
-            <div>
-              <p className="font-mono text-xs text-white">
-                OFFICER K. VANCE
-              </p>
-              <p className="text-[10px] text-[#94A3B8]">
-                OP-ID #9482-A
-              </p>
-            </div>
+              <div className="min-w-0">
+                <p className="truncate font-mono text-xs text-white" title={actor.actor_id}>
+                  {actor.actor_id}
+                </p>
+                <p className="truncate text-[10px] text-[#94A3B8]">
+                  {actor.role}
+                </p>
+              </div>
+            </Link>
+
+            <button
+              type="button"
+              onClick={signOut}
+              className="mt-3 flex w-full items-center justify-center gap-2 rounded border border-[#1E293B] px-2 py-1.5 font-mono text-[10px] uppercase text-[#94A3B8] transition hover:border-[#334155] hover:text-white"
+            >
+              <LogOut size={13} />
+              Sign out
+            </button>
           </div>
         </div>
       </aside>

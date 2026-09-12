@@ -14,11 +14,14 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import PermissionEditor from "@/components/PermissionEditor";
+import EnrollmentForm from "@/components/EnrollmentForm";
 
 import {
     ChevronLeft,
     RefreshCw,
     Search,
+    UserPlus,
     ShieldAlert,
     ShieldCheck,
     Smartphone,
@@ -77,6 +80,8 @@ export default function EmployeesPage() {
     const [role, setRole] = useState("ALL");
     const [status, setStatus] = useState("ALL");
     const [openId, setOpenId] = useState<string | null>(null);
+    const [permissionId, setPermissionId] = useState<string | null>(null);
+    const [enrolling, setEnrolling] = useState(false);
 
     const [reloadToken, setReloadToken] = useState(0);
     const reload = () => setReloadToken((current) => current + 1);
@@ -153,9 +158,35 @@ export default function EmployeesPage() {
     }, [enriched, search, role, status]);
 
     const open = enriched.find((entry) => entry.actor.actor_id === openId);
+    const permissionEntry = roster.find((entry) => entry.actor.actor_id === permissionId);
+
+    if (enrolling) {
+        return <EnrollmentForm
+            knownRoles={[...new Set(roster.map((entry) => entry.actor.role))].sort()}
+            availablePermissions={[...new Set(roster.flatMap((entry) => entry.actor.permissions))].sort()}
+            existingActorIds={roster.map((entry) => entry.actor.actor_id)}
+            onBack={() => setEnrolling(false)}
+            onEnrolled={({ actor, binding }) => {
+                // The roster reads newest first, so the new identity leads it.
+                setRoster((current) => [{ actor, binding }, ...current.filter((entry) => entry.actor.actor_id !== actor.actor_id)]);
+                setEnrolling(false);
+                setOpenId(actor.actor_id);
+            }}
+        />;
+    }
+
+    if (permissionEntry) {
+        return <PermissionEditor
+            key={permissionEntry.actor.actor_id}
+            actor={permissionEntry.actor}
+            availablePermissions={[...new Set(roster.flatMap((entry) => entry.actor.permissions))].sort()}
+            onBack={() => setPermissionId(null)}
+            onSaved={(actor) => setRoster((current) => current.map((entry) => entry.actor.actor_id === actor.actor_id ? { ...entry, actor } : entry))}
+        />;
+    }
 
     if (open) {
-        return <Dossier entry={open} onBack={() => setOpenId(null)} />;
+        return <Dossier entry={open} onBack={() => setOpenId(null)} onEditPermissions={() => setPermissionId(open.actor.actor_id)} />;
     }
 
     const operationalCount = enriched.filter((entry) => entry.operational).length;
@@ -177,15 +208,26 @@ export default function EmployeesPage() {
                         and an active device binding.
                     </p>
                 </div>
-                <button
-                    type="button"
-                    onClick={reload}
-                    disabled={loading}
-                    className="flex items-center gap-2 self-start rounded border border-[#E2E8F0] bg-white px-3 py-2 font-mono text-[11px] text-[#0F172A] transition hover:border-[#0D9488] disabled:opacity-50"
-                >
-                    <RefreshCw size={14} className="text-[#0D9488]" />
-                    REFRESH ROSTER
-                </button>
+                <div className="flex flex-wrap items-center gap-2 self-start">
+                    <button
+                        type="button"
+                        onClick={reload}
+                        disabled={loading}
+                        className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-white px-3 py-2 font-mono text-[11px] text-[#0F172A] transition hover:border-[#0D9488] disabled:opacity-50"
+                    >
+                        <RefreshCw size={14} className="text-[#0D9488]" />
+                        REFRESH ROSTER
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={() => setEnrolling(true)}
+                        className="flex items-center gap-2 rounded bg-[#0F766E] px-3 py-2 font-mono text-[11px] text-white transition hover:bg-[#115E59]"
+                    >
+                        <UserPlus size={14} />
+                        ENROLL EMPLOYEE
+                    </button>
+                </div>
             </section>
 
             {error && (
@@ -282,6 +324,7 @@ export default function EmployeesPage() {
                                     "Bound Device",
                                     "Decisions",
                                     "State",
+                                    "Actions",
                                 ].map((head) => (
                                     <th
                                         key={head}
@@ -335,20 +378,40 @@ export default function EmployeesPage() {
                                     <td className="px-4 py-3">
                                         <StateBadge entry={entry} />
                                     </td>
+                                    <td className="px-4 py-3">
+                                        <button
+                                            type="button"
+                                            aria-label={`Edit permissions for ${entry.actor.actor_id}`}
+                                            onClick={(event) => { event.stopPropagation(); setPermissionId(entry.actor.actor_id); }}
+                                            className="whitespace-nowrap rounded-md border border-[#99F6E4] px-3 py-2 text-sm font-medium text-[#0F766E] hover:bg-[#F0FDFA] focus-visible:outline-2 focus-visible:outline-[#0D9488]"
+                                        >Edit permissions</button>
+                                    </td>
                                 </tr>
                             ))}
 
                             {!visible.length && (
                                 <tr>
                                     <td
-                                        colSpan={6}
+                                        colSpan={7}
                                         className="px-4 py-16 text-center text-sm text-[#64748B]"
                                     >
-                                        {loading
-                                            ? "Loading the enrolled roster…"
-                                            : roster.length
-                                              ? "No actors match these filters."
-                                              : "No actors are enrolled yet."}
+                                        {loading ? (
+                                            "Loading the enrolled roster…"
+                                        ) : roster.length ? (
+                                            "No actors match these filters."
+                                        ) : (
+                                            <>
+                                                No actors are enrolled yet.{" "}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setEnrolling(true)}
+                                                    className="font-medium text-[#0F766E] underline underline-offset-2"
+                                                >
+                                                    Enroll the first employee
+                                                </button>
+                                                .
+                                            </>
+                                        )}
                                     </td>
                                 </tr>
                             )}
@@ -417,9 +480,11 @@ function SummaryTile({
 function Dossier({
     entry,
     onBack,
+    onEditPermissions,
 }: {
     entry: Enriched;
     onBack: () => void;
+    onEditPermissions: () => void;
 }) {
     const counts = countByOutcome(entry.decisions);
 
@@ -472,6 +537,7 @@ function Dossier({
                                 : "none"
                         }
                     />
+                    <button type="button" onClick={onEditPermissions} className="mt-4 rounded-md bg-[#0F766E] px-4 py-2 text-sm font-medium text-white hover:bg-[#115E59] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D9488]">Edit permissions</button>
                 </Panel>
 
                 <Panel title="Bound Device" icon={<Smartphone size={15} />}>

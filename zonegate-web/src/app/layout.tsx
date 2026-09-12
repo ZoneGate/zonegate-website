@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 import Shell from "@/components/layout/Shell";
+import SessionGate from "@/components/layout/SessionGate";
 
 export const metadata: Metadata = {
   title: "ZoneGate",
@@ -16,7 +17,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="bg-[#F8FAFC] text-[#0F172A] antialiased">
-        <Shell>{children}</Shell>
+        <SessionGate>
+          <Shell>{children}</Shell>
+        </SessionGate>
       </body>
     </html>
   );

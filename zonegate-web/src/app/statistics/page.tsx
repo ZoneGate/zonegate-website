@@ -139,18 +139,22 @@ function daysBetween(iso: string): number {
 function dailyBuckets(
     contexts: DecisionContext[],
     zones: Zone[],
-    span: number
+    span: number,
+    endDate: string
 ): Bucket[] {
     const rows: Bucket[] = [];
 
     for (let day = span - 1; day >= 0; day--) {
-        const label = day === 0 ? "TODAY" : `D-${day}`;
+        if (!endDate) break;
+        const date = new Date(`${endDate}T00:00:00Z`);
+        date.setUTCDate(date.getUTCDate() - day);
+        const label = date.toISOString().slice(0, 10);
 
         for (const zone of zones) {
             const matching = contexts.filter(
                 (context) =>
                     context.transaction?.zone === zone &&
-                    daysBetween(context.decision.decided_at) === day
+                    new Date(context.decision.decided_at).toISOString().slice(0, 10) === label
             );
 
             const counts = countByOutcome(matching);
@@ -227,117 +231,23 @@ function toIncidents(contexts: DecisionContext[]): Incident[] {
 }
 
 /* ------------------------------------------------------------------ *
- * The activity chart has its own window, independent of the page-wide
- * period filter: an anchor date plus a span around it. The counts are
- * still projected from the decision log, so an empty stretch of calendar
- * reads as zero rather than being dropped.
+ * Every panel on this page, the activity chart included, reads from the
+ * single page-wide period filter in the header. The counts are projected
+ * from the decision log, so an empty stretch of calendar reads as zero
+ * rather than being dropped.
  * ------------------------------------------------------------------ */
 
-type ActivityPeriod = "Weekly" | "Monthly" | "Yearly" | "Specific Day";
-
-const ACTIVITY_PERIODS: ActivityPeriod[] = [
-    "Weekly",
-    "Monthly",
-    "Yearly",
-    "Specific Day",
-];
-
 const isoDay = (value: Date) => value.toISOString().slice(0, 10);
-
-function activityWindow(period: ActivityPeriod, date: string) {
-    const anchor = new Date(`${date}T00:00:00Z`);
-    const start = new Date(anchor);
-    const end = new Date(anchor);
-
-    if (period === "Weekly") start.setUTCDate(start.getUTCDate() - 6);
-
-    if (period === "Monthly") {
-        start.setUTCDate(1);
-        end.setUTCMonth(end.getUTCMonth() + 1, 0);
-    }
-
-    if (period === "Yearly") {
-        start.setUTCMonth(0, 1);
-        end.setUTCMonth(11, 31);
-    }
-
-    return { start, end };
-}
-
-const EMPTY_ACTIVITY = { points: [], start: "", end: "", available: 0 };
-
 const noopSubscribe = () => () => {};
-
-/**
- * Today's date, empty on the server. This route is prerendered, so a date
- * baked into the HTML would be the build's day, not the reader's; the server
- * snapshot stays empty and the browser fills it in on hydration.
- */
 function useToday() {
-    return useSyncExternalStore(
-        noopSubscribe,
-        () => isoDay(new Date()),
-        () => ""
-    );
-}
-
-function buildActivityView(
-    contexts: DecisionContext[],
-    zone: "All Locations" | Zone,
-    period: ActivityPeriod,
-    date: string
-) {
-    if (!date) return EMPTY_ACTIVITY;
-
-    const { start, end } = activityWindow(period, date);
-    const from = isoDay(start);
-    const to = isoDay(end);
-
-    const inScope = contexts.filter((context) => {
-        if (zone !== "All Locations" && context.transaction?.zone !== zone) {
-            return false;
-        }
-
-        const day = context.decision.decided_at.slice(0, 10);
-        return day >= from && day <= to;
-    });
-
-    // Yearly rolls up to months; everything else stays per day.
-    const byMonth = period === "Yearly";
-    const keyOf = (iso: string) => (byMonth ? iso.slice(0, 7) : iso.slice(0, 10));
-
-    const totals = new Map<string, DecisionContext[]>();
-    for (const context of inScope) {
-        const key = keyOf(context.decision.decided_at);
-        const bucket = totals.get(key);
-        if (bucket) bucket.push(context);
-        else totals.set(key, [context]);
-    }
-
-    const points = [];
-    for (const cursor = new Date(start); cursor <= end; ) {
-        const key = keyOf(isoDay(cursor));
-        const counts = countByOutcome(totals.get(key) ?? []);
-
-        points.push({
-            day: byMonth ? key : key.slice(5),
-            approved: counts.APPROVE,
-            hold: counts.HOLD,
-            denied: counts.DENY,
-        });
-
-        if (byMonth) cursor.setUTCMonth(cursor.getUTCMonth() + 1);
-        else cursor.setUTCDate(cursor.getUTCDate() + 1);
-    }
-
-    return { points, start: from, end: to, available: inScope.length };
+    return useSyncExternalStore(noopSubscribe, () => isoDay(new Date()), () => "");
 }
 
 const PERIOD_META = {
     Today: { take: 12, cycle: "24-HOUR TRAJECTORY", tag: "1D", hourly: true },
     "Last 7 Days": { take: 7, cycle: "7-DAY TRAJECTORY", tag: "7D", hourly: false },
     "Last 30 Days": { take: 30, cycle: "30-DAY TRAJECTORY", tag: "30D", hourly: false },
-    "Custom Date": { take: 14, cycle: "CUSTOM WINDOW (14D)", tag: "14D", hourly: false },
+    "Custom Date": { take: 7, cycle: "CUSTOM WINDOW", tag: "CUSTOM", hourly: false },
 } as const;
 
 type PeriodKey = keyof typeof PERIOD_META;
@@ -365,13 +275,16 @@ export default function StatisticsPage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
-    const [activityPeriod, setActivityPeriod] = useState<ActivityPeriod>("Weekly");
 
     // The chart is anchored on today until the reader picks another date.
     const today = useToday();
-    const [pickedDate, setPickedDate] = useState<string | null>(null);
-    const activityDate = pickedDate ?? today;
-    const setActivityDate = setPickedDate;
+    const [customStart, setCustomStart] = useState("");
+    const [customEnd, setCustomEnd] = useState("");
+    const [appliedRange, setAppliedRange] = useState<{ start: string; end: string } | null>(null);
+    const customError = !customStart || !customEnd ? "Select both dates." : customStart > customEnd ? "Start date must be on or before end date." : "";
+    // The pickers are only on screen while a range is being chosen; applying
+    // one puts them away again. Pressing "Custom Date" brings them back.
+    const [rangeEditorOpen, setRangeEditorOpen] = useState(false);
 
     const [chartZoom, setChartZoom] = useState(1);
     const [chartPan, setChartPan] = useState(0);
@@ -404,7 +317,19 @@ export default function StatisticsPage() {
         };
     }, []);
 
-    const period = PERIOD_META[timeFilter];
+    const rangeEnd = timeFilter === "Custom Date" && appliedRange ? appliedRange.end : today;
+    const rangeStart = timeFilter === "Custom Date" && appliedRange ? appliedRange.start : today ? (() => {
+        const start = new Date(`${today}T00:00:00Z`);
+        start.setUTCDate(start.getUTCDate() - (timeFilter === "Today" ? 0 : PERIOD_META[timeFilter].take - 1));
+        return isoDay(start);
+    })() : "";
+    const period = { ...PERIOD_META[timeFilter], take: timeFilter === "Custom Date" && appliedRange
+        ? Math.round((Date.parse(appliedRange.end) - Date.parse(appliedRange.start)) / 86400000) + 1
+        : PERIOD_META[timeFilter].take };
+    const periodContexts = useMemo(() => contexts.filter((context) => {
+        const stamp = Date.parse(context.decision.decided_at);
+        return stamp >= Date.parse(`${rangeStart}T00:00:00Z`) && stamp < Date.parse(`${rangeEnd}T00:00:00Z`) + 86400000;
+    }), [contexts, rangeStart, rangeEnd]);
 
     // Only zones a decision has actually targeted appear in the breakdown.
     const zones = useMemo(() => {
@@ -418,19 +343,15 @@ export default function StatisticsPage() {
     const source = useMemo(
         () =>
             period.hourly
-                ? hourlyBuckets(contexts, zones)
-                : dailyBuckets(contexts, zones, period.take),
-        [contexts, zones, period]
+                ? hourlyBuckets(periodContexts, zones)
+                : dailyBuckets(periodContexts, zones, period.take, rangeEnd),
+        [periodContexts, zones, period.hourly, period.take, rangeEnd]
     );
 
-    const activity = useMemo(
-        () => buildActivityView(contexts, location, activityPeriod, activityDate),
-        [contexts, location, activityPeriod, activityDate]
-    );
 
-    const incidentSource = useMemo(() => toIncidents(contexts), [contexts]);
+    const incidentSource = useMemo(() => toIncidents(periodContexts), [periodContexts]);
 
-    const latency = useMemo(() => resolutionLatency(contexts), [contexts]);
+    const latency = useMemo(() => resolutionLatency(periodContexts.filter((context) => location === "All Locations" || context.transaction?.zone === location)), [periodContexts, location]);
 
     const data = useMemo(() => {
         const take = period.take;
@@ -477,13 +398,12 @@ export default function StatisticsPage() {
 
         const zoneSum = zoneTotals.reduce((sum, row) => sum + row.value, 0);
 
-        const maxDays = take === 12 ? 0 : take;
 
         const incidents = incidentSource.filter((incident) => {
             const zoneMatch =
                 location === "All Locations" || incident.zone === location;
 
-            return zoneMatch && incident.daysAgo <= maxDays;
+            return zoneMatch;
         });
 
         const flagCounts = (Object.keys(FLAG_LABELS) as FlagCode[]).map(
@@ -506,6 +426,9 @@ export default function StatisticsPage() {
             flagCounts,
         };
     }, [period, location, source, zones, incidentSource]);
+
+    // The chart follows the page-wide period filter; it has no window of its own.
+    const activity = { points: data.series, start: rangeStart, end: rangeEnd, available: data.total };
 
     const deniedCount = data.incidents.filter(
         (incident) => incident.decision === "DENIED"
@@ -532,7 +455,17 @@ export default function StatisticsPage() {
 
     const changeFilter = (next: PeriodKey) => {
         setTimeFilter(next);
+        setChartPan(0);
+        setChartZoom(1);
         setPage(0);
+        setRangeEditorOpen(next === "Custom Date");
+        if (next === "Custom Date" && !appliedRange && today) {
+            const start = new Date(`${today}T00:00:00Z`);
+            start.setUTCDate(start.getUTCDate() - 6);
+            const first = isoDay(start);
+            setCustomStart(first); setCustomEnd(today);
+            setAppliedRange({ start: first, end: today });
+        }
     };
 
     const changeLocation = (next: "All Locations" | Zone) => {
@@ -674,6 +607,25 @@ export default function StatisticsPage() {
                 </div>
             </section>
 
+            {timeFilter === "Custom Date" && rangeEditorOpen && <form onSubmit={(event) => {
+                event.preventDefault();
+                if (customError) return;
+                setAppliedRange({ start: customStart, end: customEnd });
+                setChartPan(0);
+                setChartZoom(1);
+                setPage(0);
+                setRangeEditorOpen(false);
+            }} className="flex flex-wrap items-end gap-4 rounded-lg border border-[#E2E8F0] bg-white p-4">
+                <label className="flex flex-col gap-2 text-sm text-[#475569]">Start date (UTC)
+                    <input type="date" required value={customStart} onChange={(event) => setCustomStart(event.target.value)} className="rounded border border-[#CBD5E1] px-3 py-2 text-sm outline-none focus:border-[#0D9488]" />
+                </label>
+                <label className="flex flex-col gap-2 text-sm text-[#475569]">End date (UTC)
+                    <input type="date" required value={customEnd} onChange={(event) => setCustomEnd(event.target.value)} className="rounded border border-[#CBD5E1] px-3 py-2 text-sm outline-none focus:border-[#0D9488]" />
+                </label>
+                <button type="submit" disabled={Boolean(customError)} className="rounded bg-[#0D9488] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0F766E] disabled:opacity-50">Apply dates</button>
+                {customError && <p role="alert" className="w-full text-sm text-[#B91C1C]">{customError}</p>}
+            </form>}
+            <p aria-live="polite" className="text-sm text-[#64748B]">{rangeStart} — {rangeEnd} (UTC). Statistics cover the latest 500 loaded decisions.</p>
             <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 <SummaryCard
                     label="Total Requests"
@@ -840,84 +792,11 @@ export default function StatisticsPage() {
                             </span>
 
                             <span className="font-mono text-[10px] text-[#64748B]">
-                                {activityPeriod.toUpperCase()}
+                                {activity.start && activity.end
+                                    ? `${activity.start} — ${activity.end}`
+                                    : "—"}
                             </span>
                         </div>
-
-                        <div className="mt-4 flex flex-wrap items-end gap-3">
-                            <div
-                                role="group"
-                                aria-label="Activity period"
-                                className="flex flex-wrap gap-1 rounded border border-[#E2E8F0] bg-[#F8FAFC] p-1"
-                            >
-                                {ACTIVITY_PERIODS.map((item) => (
-                                    <button
-                                        key={item}
-                                        type="button"
-                                        aria-pressed={activityPeriod === item}
-                                        onClick={() => {
-                                            setActivityPeriod(item);
-                                            setChartPan(0);
-                                        }}
-                                        className={`rounded px-3 py-2 text-[10px] font-semibold uppercase transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D9488] ${activityPeriod === item
-                                            ? "bg-[#0D9488] text-white"
-                                            : "text-[#64748B] hover:bg-[#E2E8F0]"
-                                            }`}
-                                    >
-                                        {item}
-                                    </button>
-                                ))}
-                            </div>
-
-                            <label className="flex flex-col gap-1 text-[10px] uppercase text-[#64748B]">
-                                {activityPeriod === "Weekly"
-                                    ? "Week ending"
-                                    : activityPeriod === "Monthly"
-                                        ? "Month"
-                                        : activityPeriod === "Yearly"
-                                            ? "Year"
-                                            : "Date"}
-
-                                <input
-                                    type={
-                                        activityPeriod === "Yearly"
-                                            ? "number"
-                                            : activityPeriod === "Monthly"
-                                                ? "month"
-                                                : "date"
-                                    }
-                                    min={activityPeriod === "Yearly" ? "2000" : undefined}
-                                    max={activityPeriod === "Yearly" ? "2100" : undefined}
-                                    value={
-                                        activityPeriod === "Yearly"
-                                            ? activityDate.slice(0, 4)
-                                            : activityPeriod === "Monthly"
-                                                ? activityDate.slice(0, 7)
-                                                : activityDate
-                                    }
-                                    onChange={(event) => {
-                                        const value = event.target.value;
-                                        if (!value || !event.target.validity.valid) return;
-
-                                        setActivityDate(
-                                            activityPeriod === "Yearly"
-                                                ? `${value}-01-01`
-                                                : activityPeriod === "Monthly"
-                                                    ? `${value}-01`
-                                                    : value
-                                        );
-                                        setChartPan(0);
-                                    }}
-                                    className="rounded border border-[#E2E8F0] bg-white px-3 py-2 font-mono text-xs text-[#0F172A] outline-none focus:border-[#0D9488]"
-                                />
-                            </label>
-                        </div>
-
-                        <p aria-live="polite" className="mt-3 font-mono text-[10px] text-[#64748B]">
-                            {activity.start && activity.end
-                                ? `${activity.start} — ${activity.end}`
-                                : "—"}
-                        </p>
 
                         <div className="mt-3 flex items-center justify-between gap-4 font-mono text-[10px]">
                             <div className="flex flex-wrap gap-5">

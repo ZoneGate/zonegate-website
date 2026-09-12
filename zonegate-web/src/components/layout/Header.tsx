@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { QUERY_CHANGE_EVENT } from "@/components/useQueryParam";
 import { getHealth } from "@/lib/api";
-import { Clock3, Menu, Search, User } from "lucide-react";
+import { Clock3, Menu, Search } from "lucide-react";
 
 function formatUtc(date: Date) {
   return `${String(date.getUTCHours()).padStart(2, "0")}:${String(
@@ -149,9 +149,6 @@ export default function Header({ onMenuClick }: { onMenuClick?: () => void }) {
           </span>
         </div>
 
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#0F172A]">
-          <User size={17} className="text-white" />
-        </div>
       </div>
     </header>
   );

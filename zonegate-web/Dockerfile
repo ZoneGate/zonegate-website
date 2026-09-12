@@ -14,7 +14,9 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # Baked in at build time: Next inlines NEXT_PUBLIC_* into the client bundle.
-ARG NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+ARG NEXT_PUBLIC_API_URL=/api/backend
+ARG BACKEND_API_URL=http://host.docker.internal:8000
+ENV BACKEND_API_URL=$BACKEND_API_URL
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
