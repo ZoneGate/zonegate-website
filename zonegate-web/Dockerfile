@@ -23,6 +23,10 @@ RUN npm run build
 
 FROM node:22-alpine AS runner
 WORKDIR /app
+# Also set at runtime: the build bakes the proxy target into the route
+# manifest, but a server that re-reads the config must resolve the same host.
+ARG BACKEND_API_URL=http://host.docker.internal:8000
+ENV BACKEND_API_URL=$BACKEND_API_URL
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000

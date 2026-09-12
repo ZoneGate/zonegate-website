@@ -3,9 +3,14 @@
 #   docker compose up -d                          # console on :3000
 #   docker compose --profile tools run --rm test  # the unit tests
 #
-# The browser uses /api/backend on the site's own origin. Next.js forwards
-# requests to the host's backend. BACKEND_API_URL is captured at build time;
-# rebuild the web image when changing that address.
+# The console calls its own origin at /api/backend and Next proxies each call
+# on to the API. That has to stay same-origin: the console session lives in an
+# httpOnly cookie, which a cross-origin request would not carry.
+#
+# BACKEND_API_URL is where the proxy forwards to, resolved from inside this
+# container. Next bakes it in at build time, so changing it means rebuilding,
+# not restarting. With the backend running from its own compose file on the
+# same machine, the default below is already correct.
 
 name: zonegate-web
 
@@ -14,7 +19,6 @@ services:
     build:
       context: ./zonegate-web
       args:
-        NEXT_PUBLIC_API_URL: /api/backend
         BACKEND_API_URL: ${BACKEND_API_URL:-http://host.docker.internal:8000}
     ports:
       - "3000:3000"

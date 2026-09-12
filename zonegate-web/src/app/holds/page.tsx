@@ -365,7 +365,7 @@ function HoldReview({
         setSubmitting(outcome);
 
         try {
-            const result = await resolveHold(decisionId, {
+            await resolveHold(decisionId, {
                 outcome,
                 resolved_by: SUPERVISOR,
                 note: note.trim(),
@@ -373,7 +373,7 @@ function HoldReview({
 
             onResolved(
                 outcome === "APPROVE"
-                    ? `${decisionId} approved — scoped token ${result.receipt.token?.slice(0, 12)}… issued`
+                    ? `${decisionId} approved by ${SUPERVISOR} — the release is authorized`
                     : `${decisionId} denied by ${SUPERVISOR}`
             );
         } catch (caught) {
@@ -614,9 +614,9 @@ function HoldReview({
                         </div>
 
                         <p className="mt-4 font-mono text-[10px] leading-relaxed text-[#64748B]">
-                            Your verdict is recorded against the decision; the policy engine&rsquo;s
-                            own outcome stays HOLD in the audit trail. A final approve issues a
-                            scoped, single-use token for this resource and zone.
+                            Your verdict and your note are recorded against the decision and
+                            appear at the top of its record; the policy engine&rsquo;s own
+                            outcome stays HOLD in the audit trail.
                         </p>
                     </section>
                 </>

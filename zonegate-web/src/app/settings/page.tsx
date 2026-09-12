@@ -22,8 +22,10 @@ import { useStoredValue } from "@/components/useStoredValue";
 import {
     ApiError,
     getPolicyConfig,
+    listCategories,
     listDecisionContexts,
     updatePolicyConfig,
+    type CategoryOption,
     type PolicyConfig,
 } from "@/lib/api";
 
@@ -48,16 +50,21 @@ const policies = [
     },
     {
         id: "03",
-        rule: "High-value cargo request outside authorized shift window",
+        rule: "Recent SIM swap detected on the bound subscriber line",
         decision: "HOLD",
     },
     {
         id: "04",
-        rule: "Recent SIM swap detected on high-value transaction",
+        rule: "Restricted cargo category, escalated to its named authority",
         decision: "HOLD",
     },
     {
         id: "05",
+        rule: "Release requested outside the authorized shift window",
+        decision: "HOLD",
+    },
+    {
+        id: "06",
         rule: "All mandatory evidence verified successfully",
         decision: "APPROVE",
     },
@@ -101,7 +108,7 @@ export default function SettingsPage() {
 }
 
 /**
- * The thresholds the deterministic engine evaluates against.
+ * The policy the deterministic engine evaluates against.
  *
  * These are the only settings on this page that change how the backend
  * behaves; everything else is a display preference for this browser. Saving
@@ -111,6 +118,7 @@ export default function SettingsPage() {
 function PolicyThresholds() {
     const [config, setConfig] = useState<PolicyConfig | null>(null);
     const [draft, setDraft] = useState<PolicyConfig | null>(null);
+    const [categories, setCategories] = useState<CategoryOption[]>([]);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [note, setNote] = useState<string | null>(null);
@@ -133,6 +141,22 @@ function PolicyThresholds() {
                         : "Unexpected error loading the policy configuration"
                 );
             });
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        // Only the vocabulary; which of these escalate comes from the config
+        // being edited, so the two never disagree on screen.
+        listCategories()
+            .then((loaded) => {
+                if (!cancelled) setCategories(loaded);
+            })
+            .catch(() => undefined);
 
         return () => {
             cancelled = true;
@@ -183,11 +207,43 @@ function PolicyThresholds() {
         );
     }
 
+    // A category the backend does not list but the config restricts is a rule
+    // in force, so it is shown rather than quietly dropped from the editor.
+    const vocabulary = [
+        ...new Set([
+            ...categories.map((option) => option.category),
+            ...Object.keys(draft.restricted_categories),
+        ]),
+    ];
+
+    const toggleCategory = (category: string) => {
+        const next = { ...draft.restricted_categories };
+
+        if (category in next) {
+            delete next[category];
+        } else {
+            next[category] =
+                categories.find((option) => option.category === category)
+                    ?.required_authority ?? "ROLE_CARGO_SUPERVISOR";
+        }
+
+        setDraft({ ...draft, restricted_categories: next });
+    };
+
+    const setAuthority = (category: string, authority: string) =>
+        setDraft({
+            ...draft,
+            restricted_categories: {
+                ...draft.restricted_categories,
+                [category]: authority,
+            },
+        });
+
     return (
         <div className="rounded border border-[#E2E8F0] bg-white p-4">
             <div className="mb-3 flex items-center justify-between">
                 <p className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
-                    Live Engine Thresholds
+                    Live Engine Policy
                 </p>
 
                 <span className="rounded-full border border-[#0D9488]/30 bg-[#F0FDFA] px-2 py-0.5 font-mono text-[10px] text-[#0F766E]">
@@ -195,24 +251,65 @@ function PolicyThresholds() {
                 </span>
             </div>
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <label className="flex flex-col gap-1">
-                    <span className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
-                        High-value threshold (USD)
-                    </span>
+            <p className="mb-3 text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
+                Restricted cargo categories
+            </p>
 
-                    <input
-                        value={draft.high_value_threshold}
-                        onChange={(event) =>
-                            setDraft({
-                                ...draft,
-                                high_value_threshold: event.target.value,
-                            })
-                        }
-                        className="rounded border border-[#E2E8F0] px-3 py-2 font-mono text-xs outline-none focus:border-[#0D9488]"
-                    />
-                </label>
+            <div className="flex flex-col divide-y divide-[#F1F5F9] rounded border border-[#E2E8F0]">
+                {vocabulary.map((category) => {
+                    const authority = draft.restricted_categories[category] ?? "";
+                    const restricted = category in draft.restricted_categories;
 
+                    return (
+                        <div
+                            key={category}
+                            className="flex flex-wrap items-center gap-3 px-3 py-2.5"
+                        >
+                            <label className="flex min-w-0 flex-1 items-center gap-2.5">
+                                <input
+                                    type="checkbox"
+                                    checked={restricted}
+                                    onChange={() => toggleCategory(category)}
+                                    className="h-4 w-4 shrink-0 accent-[#0F766E]"
+                                />
+
+                                <span className="truncate font-mono text-[11px] text-[#0F172A]">
+                                    {category}
+                                </span>
+                            </label>
+
+                            {restricted ? (
+                                <input
+                                    aria-label={`Authority for ${category}`}
+                                    value={authority}
+                                    onChange={(event) =>
+                                        setAuthority(category, event.target.value)
+                                    }
+                                    placeholder="ROLE_…"
+                                    className="w-56 rounded border border-[#E2E8F0] px-2.5 py-1.5 font-mono text-[11px] outline-none focus:border-[#0D9488]"
+                                />
+                            ) : (
+                                <span className="w-56 font-mono text-[10px] text-[#94A3B8]">
+                                    releases automatically
+                                </span>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+
+            <p className="mt-2 text-xs leading-relaxed text-[#64748B]">
+                A ticked category is never released on the engine&rsquo;s own
+                authority: it is held for the role named beside it, whatever the
+                declared value. An unticked one releases as soon as the network
+                evidence passes.
+            </p>
+
+            <p className="mt-4 mb-2 text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
+                Operational window
+            </p>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <label className="flex flex-col gap-1">
                     <span className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
                         Window opens (UTC hour)
@@ -255,11 +352,8 @@ function PolicyThresholds() {
             </div>
 
             <p className="mt-3 text-xs leading-relaxed text-[#64748B]">
-                A request at or above the threshold, made outside the window, is
-                held for{" "}
-                <span className="font-mono text-[11px]">
-                    ROLE_CARGO_SUPERVISOR
-                </span>{" "}
+                A release requested outside the window is held for{" "}
+                <span className="font-mono text-[11px]">ROLE_CARGO_SUPERVISOR</span>{" "}
                 rather than approved.
             </p>
 
