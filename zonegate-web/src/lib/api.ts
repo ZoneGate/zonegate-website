@@ -8,6 +8,63 @@
 export const API_URL =
     process.env.NEXT_PUBLIC_API_URL ?? "/api/backend";
 
+export function isDemoMode(): boolean {
+    if (process.env.NEXT_PUBLIC_DEMO_MODE === "true") return true;
+    if (typeof window !== "undefined") {
+        if (window.location.hostname.endsWith("github.io")) return true;
+        if (window.location.search.includes("demo=true")) {
+            try {
+                window.localStorage.setItem("zonegate_demo_mode", "true");
+            } catch {}
+            return true;
+        }
+        try {
+            if (window.localStorage.getItem("zonegate_demo_mode") === "true") return true;
+        } catch {}
+    }
+    return false;
+}
+
+export function enableDemoMode() {
+    if (typeof window !== "undefined") {
+        try {
+            window.localStorage.setItem("zonegate_demo_mode", "true");
+        } catch {}
+        window.location.reload();
+    }
+}
+
+export function disableDemoMode() {
+    if (typeof window !== "undefined") {
+        try {
+            window.localStorage.removeItem("zonegate_demo_mode");
+        } catch {}
+        window.location.reload();
+    }
+}
+
+export const IS_DEMO =
+    process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+
+import {
+    mockChangePassword,
+    mockEnrollActor,
+    mockGetDecisionContext,
+    mockGetHealth,
+    mockGetPolicyConfig,
+    mockGetSession,
+    mockListActors,
+    mockListCategories,
+    mockListDecisionContexts,
+    mockListDecisions,
+    mockListZones,
+    mockLogin,
+    mockLogout,
+    mockResolveHold,
+    mockUpdateActorPermissions,
+    mockUpdatePolicyConfig,
+} from "./mockData";
+
 export type DecisionOutcome = "APPROVE" | "HOLD" | "DENY";
 
 export type ContextEvaluation = {
@@ -207,6 +264,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function getHealth() {
+    if (isDemoMode()) return mockGetHealth();
     return request<HealthReport>("/health");
 }
 
@@ -215,6 +273,7 @@ export function listDecisions(params: {
     pending?: boolean;
     limit?: number;
 } = {}) {
+    if (isDemoMode()) return mockListDecisions(params);
     const query = new URLSearchParams();
 
     if (params.decision) query.set("decision", params.decision);
@@ -230,6 +289,7 @@ export function listDecisionContexts(params: {
     pending?: boolean;
     limit?: number;
 } = {}) {
+    if (isDemoMode()) return mockListDecisionContexts(params);
     const query = new URLSearchParams();
 
     if (params.decision) query.set("decision", params.decision);
@@ -242,6 +302,7 @@ export function listDecisionContexts(params: {
 
 /** Signs an enrolled operator in. The session cookie comes back on the response. */
 export function login(actorId: string, password: string) {
+    if (isDemoMode()) return mockLogin(actorId);
     return request<SessionResponse>("/v1/auth/login", {
         method: "POST",
         body: JSON.stringify({ actor_id: actorId, password }),
@@ -249,16 +310,19 @@ export function login(actorId: string, password: string) {
 }
 
 export function logout() {
+    if (isDemoMode()) return mockLogout();
     return request<void>("/v1/auth/logout", { method: "POST" });
 }
 
 /** Who the console is signed in as. Throws ApiError with status 401 when nobody is. */
 export function getSession() {
+    if (isDemoMode()) return mockGetSession();
     return request<SessionResponse>("/v1/auth/session");
 }
 
 /** Changes the signed-in operator's own console password. */
 export function changePassword(password: string) {
+    if (isDemoMode()) return mockChangePassword();
     return request<void>("/v1/auth/password", {
         method: "POST",
         body: JSON.stringify({ password }),
@@ -266,6 +330,7 @@ export function changePassword(password: string) {
 }
 
 export function listActors(limit = 200) {
+    if (isDemoMode()) return mockListActors(limit);
     return request<RosterEntry[]>(`/v1/actors?limit=${limit}`);
 }
 
@@ -278,6 +343,7 @@ export function listActors(limit = 200) {
  * against; omitted, the backend binds the actor's registered device.
  */
 export function enrollActor(actor: Actor, options?: { deviceId?: string; password?: string }) {
+    if (isDemoMode()) return mockEnrollActor(actor, options);
     return request<EnrollmentResponse>("/v1/actors", {
         method: "POST",
         body: JSON.stringify({
@@ -289,6 +355,7 @@ export function enrollActor(actor: Actor, options?: { deviceId?: string; passwor
 }
 
 export function updateActorPermissions(actorId: string, permissions: string[], expectedPermissions: string[]) {
+    if (isDemoMode()) return mockUpdateActorPermissions(actorId, permissions);
     return request<Actor>(`/v1/actors/${encodeURIComponent(actorId)}/permissions`, {
         method: "PUT",
         body: JSON.stringify({ permissions, expected_permissions: expectedPermissions }),
@@ -296,6 +363,7 @@ export function updateActorPermissions(actorId: string, permissions: string[], e
 }
 
 export function listCategories() {
+    if (isDemoMode()) return mockListCategories();
     return request<CategoryOption[]>("/v1/policy/categories");
 }
 
@@ -306,14 +374,17 @@ export function listCategories() {
  * asked about rather than an illustration of one.
  */
 export function listZones() {
+    if (isDemoMode()) return mockListZones();
     return request<GeofenceZone[]>("/v1/policy/zones");
 }
 
 export function getPolicyConfig() {
+    if (isDemoMode()) return mockGetPolicyConfig();
     return request<PolicyConfig>("/v1/policy/config");
 }
 
 export function updatePolicyConfig(config: PolicyConfig) {
+    if (isDemoMode()) return mockUpdatePolicyConfig(config);
     return request<PolicyConfig>("/v1/policy/config", {
         method: "PUT",
         body: JSON.stringify(config),
@@ -321,6 +392,7 @@ export function updatePolicyConfig(config: PolicyConfig) {
 }
 
 export function getDecisionContext(decisionId: string) {
+    if (isDemoMode()) return mockGetDecisionContext(decisionId);
     return request<DecisionContext>(
         `/v1/authorizations/${encodeURIComponent(decisionId)}/context`
     );
@@ -330,6 +402,7 @@ export function resolveHold(
     decisionId: string,
     body: { outcome: "APPROVE" | "DENY"; resolved_by: string; note?: string }
 ) {
+    if (isDemoMode()) return mockResolveHold(decisionId, body);
     return request<{ decision: PolicyDecision; receipt: Receipt }>(
         `/v1/authorizations/${encodeURIComponent(decisionId)}/resolve`,
         { method: "POST", body: JSON.stringify(body) }

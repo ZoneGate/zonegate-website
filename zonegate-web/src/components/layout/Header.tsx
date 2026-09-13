@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { QUERY_CHANGE_EVENT } from "@/components/useQueryParam";
-import { getHealth } from "@/lib/api";
+import { getHealth, isDemoMode } from "@/lib/api";
 import { Clock3, Menu, Search } from "lucide-react";
 
 function formatUtc(date: Date) {
@@ -16,6 +16,7 @@ function formatUtc(date: Date) {
 export default function Header({ onMenuClick }: { onMenuClick?: () => void }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
+  const [demo, setDemo] = useState(false);
 
   // Rendered empty on the server, then ticked on the client, so the markup matches.
   const [clock, setClock] = useState("");
@@ -25,6 +26,7 @@ export default function Header({ onMenuClick }: { onMenuClick?: () => void }) {
   const [gateOnline, setGateOnline] = useState<boolean | null>(null);
 
   useEffect(() => {
+    setDemo(isDemoMode());
     const tick = () => setClock(formatUtc(new Date()));
 
     tick();
@@ -88,6 +90,12 @@ export default function Header({ onMenuClick }: { onMenuClick?: () => void }) {
           <span className="rounded border border-[#E2E8F0] bg-[#F1F5F9] px-2 py-1 font-mono text-xs text-[#0F172A]">
             BERTH-04 / SECTOR-B
           </span>
+
+          {demo && (
+            <span className="inline-flex items-center gap-1 rounded border border-[#0284C7]/30 bg-[#0284C7]/10 px-2 py-1 font-mono text-[10px] font-semibold text-[#0369A1]">
+              DEMO MODE
+            </span>
+          )}
         </div>
 
         <div className="hidden items-center gap-2 xl:flex">

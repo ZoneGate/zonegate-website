@@ -230,11 +230,30 @@ Decision states are represented as:
 - **HOLD** — requires additional or human review
 - **DENY** — authorization rejected
 
-## Current Development Status
+## Client-Only Demo & GitHub Pages
 
-The current version focuses on the frontend dashboard and interface flow.
+To run the client-only demo locally with mock data and zero backend requirements:
 
-Dashboard data is currently represented using mock data for UI development and demonstration purposes. Backend services, real-time network evidence, authentication, and production authorization workflows can be integrated separately.
+```bash
+cd zonegate-web
+npm run dev:demo
+```
+
+To build the static export for GitHub Pages locally:
+
+```bash
+cd zonegate-web
+npm run build:demo
+```
+
+This outputs static HTML/CSS/JS to `zonegate-web/out`.
+
+### Automated GitHub Pages Deployment
+
+The repository includes a GitHub Actions workflow at `.github/workflows/deploy-pages.yml`:
+1. In your GitHub repository, go to **Settings** > **Pages**.
+2. Under **Build and deployment** > **Source**, select **GitHub Actions**.
+3. Pushes to `main` (or manual triggers under the **Actions** tab) automatically build and publish the demo.
 
 ## Notes
 

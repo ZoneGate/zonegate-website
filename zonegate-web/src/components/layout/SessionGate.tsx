@@ -33,7 +33,10 @@ export default function SessionGate({ children }: { children: React.ReactNode })
 
     const check = useCallback(async () => {
         try {
-            const session = await getSession();
+            const timeout = new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new ApiError("Session probe timed out (backend unreachable)", 0)), 3000)
+            );
+            const session = await Promise.race([getSession(), timeout]);
             setActor(session.actor);
             setUnreachable(null);
         } catch (caught) {

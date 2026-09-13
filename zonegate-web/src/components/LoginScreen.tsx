@@ -14,15 +14,16 @@
 
 import { useState } from "react";
 import Image from "next/image";
-import { LogIn } from "lucide-react";
-import { ApiError, login, type Actor } from "@/lib/api";
+import { LogIn, Sparkles } from "lucide-react";
+import { ApiError, enableDemoMode, isDemoMode, login, type Actor } from "@/lib/api";
 
 export default function LoginScreen({ unreachable, onSignedIn }: {
     unreachable: string | null;
     onSignedIn: (actor: Actor) => void;
 }) {
-    const [actorId, setActorId] = useState("");
-    const [password, setPassword] = useState("");
+    const activeDemo = isDemoMode();
+    const [actorId, setActorId] = useState(activeDemo ? "OP-7821" : "");
+    const [password, setPassword] = useState(activeDemo ? "demo" : "");
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -74,6 +75,14 @@ export default function LoginScreen({ unreachable, onSignedIn }: {
                     <div role="alert" className="mt-8 rounded-lg border border-[#FECACA] bg-[#FEF2F2] px-4 py-3">
                         <p className="text-sm font-medium text-[#B91C1C]">Authorization API unavailable</p>
                         <p className="mt-1 font-mono text-[11px] text-[#DC2626]">{unreachable}</p>
+                        <button
+                            type="button"
+                            onClick={() => enableDemoMode()}
+                            className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-md bg-[#0D9488] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#0F766E]"
+                        >
+                            <Sparkles size={14} />
+                            Launch Client-Only Demo Mode
+                        </button>
                     </div>
                 )}
 
@@ -123,6 +132,13 @@ export default function LoginScreen({ unreachable, onSignedIn }: {
                         <LogIn size={17} />
                         {submitting ? "Signing in…" : "Sign in"}
                     </button>
+
+                    {activeDemo && (
+                        <div className="mt-4 flex items-center justify-center gap-1.5 rounded-lg border border-[#0284C7]/20 bg-[#0284C7]/5 px-3 py-2 text-center text-xs text-[#0369A1]">
+                            <Sparkles size={14} className="shrink-0" />
+                            <span>Client-Only Demo Mode &mdash; Click <strong>Sign in</strong> to enter</span>
+                        </div>
+                    )}
                 </form>
 
                 <p className="mt-8 text-center text-sm leading-relaxed text-[#94A3B8]">
