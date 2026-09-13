@@ -41,6 +41,7 @@ import {
     shortStamp,
     shortTime,
 } from "@/lib/derive";
+import { evidenceLabel, type PlanOutline } from "@/lib/evidence";
 
 const TABS = [
     "All Requests",
@@ -594,24 +595,34 @@ function RecordDetail({
                         <>
                             <EvidenceRow
                                 label="Number verified"
+                                kind="NUMBER_VERIFICATION"
+                                plan={context.evidence_plan}
                                 state={evidence.number_verified}
                             />
                             <EvidenceRow
                                 label="Location verified"
+                                kind="LOCATION_VERIFICATION"
+                                plan={context.evidence_plan}
                                 state={evidence.location_verified}
                             />
                             <EvidenceRow
                                 label="Recent SIM swap"
+                                kind="SIM_SWAP"
+                                plan={context.evidence_plan}
                                 state={evidence.recent_sim_swap}
                                 invert
                             />
                             <EvidenceRow
                                 label="Recent device swap"
+                                kind="DEVICE_SWAP"
+                                plan={context.evidence_plan}
                                 state={evidence.recent_device_swap}
                                 invert
                             />
                             <EvidenceRow
                                 label="Device reachable"
+                                kind="REACHABILITY"
+                                plan={context.evidence_plan}
                                 state={evidence.reachable}
                             />
 
@@ -921,10 +932,14 @@ function Field({ label, value }: { label: string; value: string }) {
 
 function EvidenceRow({
     label,
+    kind,
+    plan,
     state,
     invert = false,
 }: {
     label: string;
+    kind: string;
+    plan?: PlanOutline | null;
     state: boolean | null;
     /** For swap checks a `true` reading is the bad outcome. */
     invert?: boolean;
@@ -939,7 +954,7 @@ function EvidenceRow({
               : "border-[#FEE2E2] bg-[#FEF2F2] text-[#B91C1C]";
 
     const text =
-        state === null ? "NOT COLLECTED" : state ? "TRUE" : "FALSE";
+        evidenceLabel(kind, state, plan);
 
     return (
         <div className="flex items-center justify-between py-1.5">

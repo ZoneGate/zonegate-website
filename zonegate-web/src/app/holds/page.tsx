@@ -22,6 +22,7 @@ import {
 } from "@/lib/api";
 import { useSession } from "@/components/layout/SessionGate";
 import { holdsAuthority } from "@/lib/roles";
+import { evidenceLabel, type PlanOutline } from "@/lib/evidence";
 
 const money = new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -512,24 +513,34 @@ function HoldReview({
                             <div className="mt-4 flex flex-col gap-2">
                                 <EvidenceRow
                                     label="Number verified"
+                                    kind="NUMBER_VERIFICATION"
+                                    plan={context?.evidence_plan}
                                     state={evidence?.number_verified ?? null}
                                 />
                                 <EvidenceRow
                                     label="Location verified"
+                                    kind="LOCATION_VERIFICATION"
+                                    plan={context?.evidence_plan}
                                     state={evidence?.location_verified ?? null}
                                 />
                                 <EvidenceRow
                                     label="Recent SIM swap"
+                                    kind="SIM_SWAP"
+                                    plan={context?.evidence_plan}
                                     state={evidence?.recent_sim_swap ?? null}
                                     invert
                                 />
                                 <EvidenceRow
                                     label="Recent device swap"
+                                    kind="DEVICE_SWAP"
+                                    plan={context?.evidence_plan}
                                     state={evidence?.recent_device_swap ?? null}
                                     invert
                                 />
                                 <EvidenceRow
                                     label="Device reachable"
+                                    kind="REACHABILITY"
+                                    plan={context?.evidence_plan}
                                     state={evidence?.reachable ?? null}
                                 />
                             </div>
@@ -683,10 +694,14 @@ function Row({ label, value }: { label: string; value: string }) {
 
 function EvidenceRow({
     label,
+    kind,
+    plan,
     state,
     invert = false,
 }: {
     label: string;
+    kind: string;
+    plan?: PlanOutline | null;
     state: boolean | null;
     invert?: boolean;
 }) {
@@ -694,7 +709,7 @@ function EvidenceRow({
     const good = state === null ? null : invert ? !state : state;
 
     const text =
-        state === null ? "NOT COLLECTED" : state ? "TRUE" : "FALSE";
+        evidenceLabel(kind, state, plan);
 
     return (
         <div className="flex items-center justify-between gap-3 border-b border-[#E2E8F0] pb-2 last:border-b-0">
