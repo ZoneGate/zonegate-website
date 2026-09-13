@@ -41,7 +41,7 @@ import {
     shortStamp,
     shortTime,
 } from "@/lib/derive";
-import { evidenceLabel, type PlanOutline } from "@/lib/evidence";
+import EvidenceRow from "@/components/EvidenceRow";
 
 const TABS = [
     "All Requests",
@@ -594,33 +594,31 @@ function RecordDetail({
                     {evidence ? (
                         <>
                             <EvidenceRow
-                                label="Number verified"
+                                label="Number verification"
                                 kind="NUMBER_VERIFICATION"
                                 plan={context.evidence_plan}
                                 state={evidence.number_verified}
                             />
                             <EvidenceRow
-                                label="Location verified"
+                                label="Location verification"
                                 kind="LOCATION_VERIFICATION"
                                 plan={context.evidence_plan}
                                 state={evidence.location_verified}
                             />
                             <EvidenceRow
-                                label="Recent SIM swap"
+                                label="SIM swap check"
                                 kind="SIM_SWAP"
                                 plan={context.evidence_plan}
                                 state={evidence.recent_sim_swap}
-                                invert
                             />
                             <EvidenceRow
-                                label="Recent device swap"
+                                label="Device swap check"
                                 kind="DEVICE_SWAP"
                                 plan={context.evidence_plan}
                                 state={evidence.recent_device_swap}
-                                invert
                             />
                             <EvidenceRow
-                                label="Device reachable"
+                                label="Reachability"
                                 kind="REACHABILITY"
                                 plan={context.evidence_plan}
                                 state={evidence.reachable}
@@ -929,43 +927,3 @@ function Field({ label, value }: { label: string; value: string }) {
         </div>
     );
 }
-
-function EvidenceRow({
-    label,
-    kind,
-    plan,
-    state,
-    invert = false,
-}: {
-    label: string;
-    kind: string;
-    plan?: PlanOutline | null;
-    state: boolean | null;
-    /** For swap checks a `true` reading is the bad outcome. */
-    invert?: boolean;
-}) {
-    const good = state === null ? null : invert ? !state : state;
-
-    const style =
-        good === null
-            ? "border-[#E2E8F0] bg-[#F1F5F9] text-[#64748B]"
-            : good
-              ? "border-[#CCFBF1] bg-[#F0FDFA] text-[#0F766E]"
-              : "border-[#FEE2E2] bg-[#FEF2F2] text-[#B91C1C]";
-
-    const text =
-        evidenceLabel(kind, state, plan);
-
-    return (
-        <div className="flex items-center justify-between py-1.5">
-            <span className="text-sm text-[#0F172A]">{label}</span>
-
-            <span
-                className={`rounded border px-2 py-0.5 font-mono text-[10px] ${style}`}
-            >
-                {text}
-            </span>
-        </div>
-    );
-}
-

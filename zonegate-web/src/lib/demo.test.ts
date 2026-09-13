@@ -119,15 +119,18 @@ describe("Demo mode client store and mock handlers", () => {
 
     it("returns and updates policy config, zones, and categories", async () => {
         const config = await mockGetPolicyConfig();
-        expect(config.window_start_hour).toBe(6);
+        expect(config).not.toHaveProperty("window_start_hour");
 
         await mockUpdatePolicyConfig({
             ...config,
-            window_start_hour: 7,
+            restricted_categories: {
+                ...config.restricted_categories,
+                PERISHABLE: "ROLE_COLD_CHAIN_LEAD",
+            },
         });
 
         const updatedConfig = await mockGetPolicyConfig();
-        expect(updatedConfig.window_start_hour).toBe(7);
+        expect(updatedConfig.restricted_categories.PERISHABLE).toBe("ROLE_COLD_CHAIN_LEAD");
 
         const zones = await mockListZones();
         expect(zones.length).toBeGreaterThan(0);

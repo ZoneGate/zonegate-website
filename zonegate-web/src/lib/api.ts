@@ -192,8 +192,6 @@ export type EnrollmentResponse = {
 export type PolicyConfig = {
     /** Cargo category -> the authority role that must approve it. */
     restricted_categories: Record<string, string>;
-    window_start_hour: number;
-    window_end_hour: number;
 };
 
 /** One cargo category, and who has to approve it if anyone does. */
