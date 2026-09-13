@@ -22,7 +22,7 @@ import {
 } from "@/lib/api";
 import { useSession } from "@/components/layout/SessionGate";
 import { holdsAuthority } from "@/lib/roles";
-import { evidenceLabel, type PlanOutline } from "@/lib/evidence";
+import EvidenceRow from "@/components/EvidenceRow";
 
 const money = new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -512,33 +512,31 @@ function HoldReview({
 
                             <div className="mt-4 flex flex-col gap-2">
                                 <EvidenceRow
-                                    label="Number verified"
+                                    label="Number verification"
                                     kind="NUMBER_VERIFICATION"
                                     plan={context?.evidence_plan}
                                     state={evidence?.number_verified ?? null}
                                 />
                                 <EvidenceRow
-                                    label="Location verified"
+                                    label="Location verification"
                                     kind="LOCATION_VERIFICATION"
                                     plan={context?.evidence_plan}
                                     state={evidence?.location_verified ?? null}
                                 />
                                 <EvidenceRow
-                                    label="Recent SIM swap"
+                                    label="SIM swap check"
                                     kind="SIM_SWAP"
                                     plan={context?.evidence_plan}
                                     state={evidence?.recent_sim_swap ?? null}
-                                    invert
                                 />
                                 <EvidenceRow
-                                    label="Recent device swap"
+                                    label="Device swap check"
                                     kind="DEVICE_SWAP"
                                     plan={context?.evidence_plan}
                                     state={evidence?.recent_device_swap ?? null}
-                                    invert
                                 />
                                 <EvidenceRow
-                                    label="Device reachable"
+                                    label="Reachability"
                                     kind="REACHABILITY"
                                     plan={context?.evidence_plan}
                                     state={evidence?.reachable ?? null}
@@ -688,43 +686,6 @@ function Row({ label, value }: { label: string; value: string }) {
         <div className="flex justify-between gap-3 border-b border-[#E2E8F0] pb-1.5 last:border-b-0">
             <span>{label.toUpperCase()}</span>
             <span className="text-right font-medium text-[#0F172A]">{value}</span>
-        </div>
-    );
-}
-
-function EvidenceRow({
-    label,
-    kind,
-    plan,
-    state,
-    invert = false,
-}: {
-    label: string;
-    kind: string;
-    plan?: PlanOutline | null;
-    state: boolean | null;
-    invert?: boolean;
-}) {
-    // For swap checks a `true` reading is the bad outcome, hence `invert`.
-    const good = state === null ? null : invert ? !state : state;
-
-    const text =
-        evidenceLabel(kind, state, plan);
-
-    return (
-        <div className="flex items-center justify-between gap-3 border-b border-[#E2E8F0] pb-2 last:border-b-0">
-            <span className="text-sm text-[#0F172A]">{label}</span>
-
-            <span
-                className={`rounded px-2 py-1 font-mono text-[10px] font-semibold ${good === null
-                    ? "border border-[#E2E8F0] bg-[#F1F5F9] text-[#64748B]"
-                    : good
-                        ? "border border-[#99F6E4] bg-[#F0FDFA] text-[#0F766E]"
-                        : "border border-[#FECACA] bg-[#FEF2F2] text-[#B91C1C]"
-                    }`}
-            >
-                {text}
-            </span>
         </div>
     );
 }

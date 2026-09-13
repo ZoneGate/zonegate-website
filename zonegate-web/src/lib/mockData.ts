@@ -103,8 +103,6 @@ export const INITIAL_POLICY_CONFIG: PolicyConfig = {
         PHARMACEUTICALS: "COMPLIANCE_OFFICER",
         BONDED_CUSTOMS: "CUSTOMS_LIAISON",
     },
-    window_start_hour: 6,
-    window_end_hour: 22,
 };
 
 export const INITIAL_ROSTER: RosterEntry[] = [

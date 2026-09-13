@@ -60,11 +60,6 @@ const policies = [
     },
     {
         id: "05",
-        rule: "Release requested outside the authorized shift window",
-        decision: "HOLD",
-    },
-    {
-        id: "06",
         rule: "All mandatory evidence verified successfully",
         decision: "APPROVE",
     },
@@ -303,58 +298,6 @@ function PolicyThresholds() {
                 authority: it is held for the role named beside it, whatever the
                 declared value. An unticked one releases as soon as the network
                 evidence passes.
-            </p>
-
-            <p className="mt-4 mb-2 text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
-                Operational window
-            </p>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <label className="flex flex-col gap-1">
-                    <span className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
-                        Window opens (UTC hour)
-                    </span>
-
-                    <input
-                        type="number"
-                        min={0}
-                        max={23}
-                        value={draft.window_start_hour}
-                        onChange={(event) =>
-                            setDraft({
-                                ...draft,
-                                window_start_hour: Number(event.target.value),
-                            })
-                        }
-                        className="rounded border border-[#E2E8F0] px-3 py-2 font-mono text-xs outline-none focus:border-[#0D9488]"
-                    />
-                </label>
-
-                <label className="flex flex-col gap-1">
-                    <span className="text-[10px] font-medium uppercase tracking-wider text-[#64748B]">
-                        Window closes (UTC hour)
-                    </span>
-
-                    <input
-                        type="number"
-                        min={1}
-                        max={24}
-                        value={draft.window_end_hour}
-                        onChange={(event) =>
-                            setDraft({
-                                ...draft,
-                                window_end_hour: Number(event.target.value),
-                            })
-                        }
-                        className="rounded border border-[#E2E8F0] px-3 py-2 font-mono text-xs outline-none focus:border-[#0D9488]"
-                    />
-                </label>
-            </div>
-
-            <p className="mt-3 text-xs leading-relaxed text-[#64748B]">
-                A release requested outside the window is held for{" "}
-                <span className="font-mono text-[11px]">ROLE_CARGO_SUPERVISOR</span>{" "}
-                rather than approved.
             </p>
 
             {error && (

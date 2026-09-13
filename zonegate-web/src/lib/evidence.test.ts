@@ -1,31 +1,47 @@
 import { describe, expect, it } from "vitest";
 
-import { evidenceLabel } from "./evidence";
+import { evidenceCheck } from "./evidence";
 
 const plan = {
     mandatory: ["LOCATION_VERIFICATION"],
     combined: ["LOCATION_VERIFICATION", "SIM_SWAP"],
 };
 
-describe("evidenceLabel", () => {
-    it("reads an answered check as the carrier gave it", () => {
-        expect(evidenceLabel("SIM_SWAP", false, plan)).toBe("FALSE");
-        expect(evidenceLabel("LOCATION_VERIFICATION", true, plan)).toBe("TRUE");
+describe("evidenceCheck", () => {
+    it("ticks a check that came out in the actor's favour", () => {
+        expect(evidenceCheck("LOCATION_VERIFICATION", true, plan)).toEqual({
+            tone: "pass",
+            detail: "The network placed the device inside the zone.",
+        });
     });
 
-    it("keeps not collected for a planned check the carrier did not answer", () => {
-        expect(evidenceLabel("SIM_SWAP", null, plan)).toBe("NOT COLLECTED");
+    it("reads a swap check the right way round", () => {
+        expect(evidenceCheck("SIM_SWAP", false, plan).tone).toBe("pass");
+        expect(evidenceCheck("SIM_SWAP", true, plan)).toEqual({
+            tone: "fail",
+            detail: "The SIM on this line was swapped recently.",
+        });
     });
 
-    it("says an unplanned optional check was never requested", () => {
-        expect(evidenceLabel("REACHABILITY", null, plan)).toBe("NOT REQUESTED");
+    it("crosses a failed check", () => {
+        expect(evidenceCheck("REACHABILITY", false, plan).tone).toBe("fail");
     });
 
-    it("says number verification dropped from the plan cannot be attested", () => {
-        expect(evidenceLabel("NUMBER_VERIFICATION", null, plan)).toBe("CARRIER CANNOT ATTEST");
+    it("gives an empty reading neither a tick nor a cross, and says why", () => {
+        expect(evidenceCheck("SIM_SWAP", null, plan)).toEqual({
+            tone: "none",
+            detail: "Requested, but the carrier did not answer.",
+        });
+        expect(evidenceCheck("REACHABILITY", null, plan).detail).toBe("Not requested for this decision.");
+        expect(evidenceCheck("NUMBER_VERIFICATION", null, plan).detail).toBe(
+            "The carrier cannot attest this over the network."
+        );
     });
 
     it("does not guess without a plan", () => {
-        expect(evidenceLabel("NUMBER_VERIFICATION", null, null)).toBe("NOT COLLECTED");
+        expect(evidenceCheck("NUMBER_VERIFICATION", null, null)).toEqual({
+            tone: "none",
+            detail: "No result was recorded for this check.",
+        });
     });
 });

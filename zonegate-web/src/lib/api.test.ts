@@ -215,14 +215,12 @@ describe("policy configuration", () => {
         mockFetch(() => ({
             body: {
                 restricted_categories: { WEAPONS: "ROLE_SECURITY_OFFICER" },
-                window_start_hour: 6,
-                window_end_hour: 20,
             },
         }));
 
         return getPolicyConfig().then((config) => {
             expect(config.restricted_categories.WEAPONS).toBe("ROLE_SECURITY_OFFICER");
-            expect(config.window_start_hour).toBe(6);
+            expect(config).not.toHaveProperty("window_start_hour");
         });
     });
 
@@ -231,8 +229,6 @@ describe("policy configuration", () => {
 
         return updatePolicyConfig({
             restricted_categories: { HAZARDOUS: "ROLE_SAFETY_OFFICER" },
-            window_start_hour: 7,
-            window_end_hour: 19,
         }).then(() => {
             const [url, init] = spy.mock.calls[0];
 
@@ -244,18 +240,16 @@ describe("policy configuration", () => {
     it("reports a rejected configuration rather than swallowing it", () => {
         mockFetch(() => ({
             status: 400,
-            body: { detail: "window_end_hour must be later than window_start_hour" },
+            body: { detail: "Category 'WEAPONS' is restricted but names no approving authority" },
         }));
 
         return updatePolicyConfig({
-            restricted_categories: {},
-            window_start_hour: 20,
-            window_end_hour: 6,
+            restricted_categories: { WEAPONS: "" },
         }).then(
             () => expect.unreachable("should have thrown"),
             (error) => {
                 expect(error.status).toBe(400);
-                expect(error.message).toContain("window_end_hour");
+                expect(error.message).toContain("WEAPONS");
             }
         );
     });

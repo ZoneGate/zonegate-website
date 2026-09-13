@@ -14,6 +14,12 @@
 
 import { useState } from "react";
 import Image from "next/image";
+
+// Imported rather than referenced as "/zonegate-shield.png": with images
+// unoptimized, next/image does not add the base path to a string src, so the
+// GitHub Pages demo (served under /zonegate-website) asked for the logo at the
+// site root and got a 404. An import is emitted with the base path applied.
+import shield from "@/assets/zonegate-shield.png";
 import { LogIn, Sparkles } from "lucide-react";
 import { ApiError, enableDemoMode, isDemoMode, login, type Actor } from "@/lib/api";
 
@@ -57,7 +63,7 @@ export default function LoginScreen({ unreachable, onSignedIn }: {
                     {/* The shield is the artwork; the wordmark is live text, so
                         every letter stays correctly drawn at any size. */}
                     <Image
-                        src="/zonegate-shield.png"
+                        src={shield}
                         alt=""
                         width={500}
                         height={500}
